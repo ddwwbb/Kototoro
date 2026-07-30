@@ -56,9 +56,12 @@ internal class ComposeReaderController(
 
 	@Composable
 	fun Content(showControlLabels: Boolean) {
+		val infoBarEmbedded = readerMode != ReaderMode.WEBTOON
+		val systemStatus = if (infoBarEmbedded) rememberReaderSystemStatus() else null
 		ComposeReaderActivityScaffold(
 					state = chromeState,
 					showControlLabels = showControlLabels,
+					infoBarEmbedded = infoBarEmbedded,
 					chapterPanelTabId = chaptersTabId,
 					chaptersPanelContent = { selectedTabId, panelState ->
 						chaptersPanelContent(selectedTabId, panelState)
@@ -96,6 +99,15 @@ internal class ComposeReaderController(
 						webtoonZoomCommand = webtoonZoomCommand,
 						isDoublePage = isDoublePage,
 						layoutGeneration = readerLayoutGeneration,
+						pageOverlay = {
+							systemStatus?.let {
+									ReaderPageInfoBar(
+										state = chromeState.infoBar,
+										controlsVisible = chromeState.controlsVisible,
+										systemStatus = it,
+									)
+								}
+							},
 						shouldAcceptReaderPosition = { position -> shouldAcceptPosition(position) },
 						onShowErrorDetails = errorHost::showReaderErrorDetails,
 						onRetryError = errorHost::resolveReaderError,
@@ -455,7 +467,6 @@ internal class ComposeReaderController(
 
 	override fun switchPageBy(delta: Int) {
 		val pageStep = if (isDoublePage) 2 else 1
-		val direction = if (readerMode == ReaderMode.REVERSED) -1 else 1
 		val pages = viewModel.content.value.pages
 		val basePosition = resolvePageNavigationBasePosition(
 			pageKeys = pages.map { it.readerKey },
@@ -463,7 +474,7 @@ internal class ComposeReaderController(
 			settledPosition = resolveCurrentPosition(),
 		)
 		switchPageTo(
-			position = resolvePageNavigationTarget(basePosition, delta, pageStep, direction),
+			position = resolvePageNavigationTarget(basePosition, delta, pageStep),
 			smooth = true,
 		)
 	}
