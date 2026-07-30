@@ -26,27 +26,36 @@ jobs:
         submodules: recursive
         fetch-depth: 0
     
-    - name: Generate Changelog
+    - name: Generate Release Notes
       id: changelog
+      env:
+        RELEASE_NOTES: ${{ inputs.release_notes }}
       run: |
-        # Find the most recent tag
-        PREVIOUS_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-        
-        echo "Previous Tag: $PREVIOUS_TAG"
-        
-        if [ -z "$PREVIOUS_TAG" ]; then
-          echo "No previous tag found. Getting all logs."
-          CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges)
-        else
-          echo "Getting logs between $PREVIOUS_TAG and HEAD"
-          CHANGELOG=$(git log --pretty=format:"- %s (%h)" "$PREVIOUS_TAG..HEAD" --no-merges)
+        set -euo pipefail
+
+        if [[ -n "${RELEASE_NOTES}" ]]; then
+          printf '%s\n' "${RELEASE_NOTES}" > release-notes.md
+          exit 0
         fi
-        
-        # Escape for GITHUB_OUTPUT
-        echo "changelog<<EOF" >> $GITHUB_OUTPUT
-        echo "$CHANGELOG" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-        echo "previous_tag=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
+
+        previous_tag="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+        echo "Previous tag: ${previous_tag:-<none>}"
+
+        if [[ -z "${previous_tag}" ]]; then
+          {
+            echo "Initial release for this repository. Showing the latest 100 commits."
+            echo
+            git log --max-count=100 --pretty=format:"- %s (%h)" --no-merges
+          } > release-notes.md
+        else
+          git log \
+            --pretty=format:"- %s (%h)" \
+            --no-merges \
+            "${previous_tag}..HEAD" > release-notes.md
+        fi
+
+        echo >> release-notes.md
+        echo "previous_tag=${previous_tag}" >> "${GITHUB_OUTPUT}"
     
     - name: Set up JDK
       uses: actions/setup-java@v4
@@ -130,7 +139,7 @@ jobs:
         name: Kototoro ${{ steps.version.outputs.version_name }}
         files: |
           release/*.apk
-        body: ${{ inputs.release_notes != '' && inputs.release_notes || steps.changelog.outputs.changelog }}
+        body_path: release-notes.md
         draft: false
         prerelease: false
       env:
