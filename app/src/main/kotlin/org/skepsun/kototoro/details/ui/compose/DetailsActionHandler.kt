@@ -61,7 +61,11 @@ internal fun handleDetailsAction(
         is DetailsAction.OpenSource -> onOpenSourceList?.invoke(action.source, null, null)
             ?: appRouter.openList(action.source, null, null)
         is DetailsAction.OpenTrackingDiscover -> appRouter.openTrackingDiscover(action.service, action.forceLoad)
-        is DetailsAction.SearchAuthorOnSource -> appRouter.openSearch(action.source, action.author)
+        is DetailsAction.SearchAuthorOnSource -> appRouter.openList(
+            action.source,
+            ContentListFilter(author = action.author),
+            null,
+        )
         is DetailsAction.SearchAuthorEverywhere -> appRouter.openSearch(action.author, SearchKind.AUTHOR)
         is DetailsAction.SearchTagOnSource -> appRouter.openSearch(action.tag.source, action.tag.title)
         is DetailsAction.SearchTagEverywhere -> appRouter.openSearch(action.tagTitle, SearchKind.TAG)

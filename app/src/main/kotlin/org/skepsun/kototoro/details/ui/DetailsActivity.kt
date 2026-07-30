@@ -37,6 +37,7 @@ import org.skepsun.kototoro.details.ui.pager.bookmarks.BookmarksViewModel
 import org.skepsun.kototoro.details.ui.pager.pages.PagesViewModel
 import org.skepsun.kototoro.main.ui.owners.BottomSheetOwner
 import org.skepsun.kototoro.parsers.model.Content
+import org.skepsun.kototoro.parsers.model.ContentListFilter
 import org.skepsun.kototoro.parsers.model.ContentRating
 import org.skepsun.kototoro.search.domain.SearchKind
 import javax.inject.Inject
@@ -164,7 +165,11 @@ class DetailsActivity :
             DetailsAction.ManageCategories -> this.router.openFavoriteCategories()
             is DetailsAction.OpenSource -> this.router.openList(action.source, null, null)
             is DetailsAction.OpenTrackingDiscover -> this.router.openTrackingDiscover(action.service, action.forceLoad)
-            is DetailsAction.SearchAuthorOnSource -> this.router.openSearch(action.source, action.author)
+            is DetailsAction.SearchAuthorOnSource -> this.router.openList(
+                action.source,
+                ContentListFilter(author = action.author),
+                null,
+            )
             is DetailsAction.SearchAuthorEverywhere -> this.router.openSearch(action.author, SearchKind.AUTHOR)
             is DetailsAction.SearchTagOnSource -> this.router.openSearch(action.tag.source, action.tag.title)
             is DetailsAction.SearchTagEverywhere -> this.router.openSearch(action.tagTitle, SearchKind.TAG)

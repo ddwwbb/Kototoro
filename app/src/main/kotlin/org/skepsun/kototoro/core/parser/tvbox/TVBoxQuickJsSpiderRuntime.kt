@@ -89,11 +89,11 @@ internal class TVBoxQuickJsSpiderRuntime(
 		filter: ContentListFilter?,
 	): List<Content>? {
 		val page = offset + 1
-		val query = filter?.query?.trim().orEmpty()
+		val query = TVBoxListSupport.searchTerm(filter)
 		val selectedCategoryId = filter?.tags
 			?.firstNotNullOfOrNull { tag -> parseCategoryTagId(tag.key) }
 		return runCatching {
-			when {
+			val items = when {
 				query.isNotBlank() && config.site.searchable -> search(query, page)
 				selectedCategoryId != null -> loadCategory(selectedCategoryId, page)
 				offset == 0 -> {
@@ -108,6 +108,7 @@ internal class TVBoxQuickJsSpiderRuntime(
 					loadInitialCategoryFallback(loadHome(), page)
 				}
 			}
+			TVBoxListSupport.sort(items, order, query, Content::title)
 		}.onFailure {
 			logQuickJsFailure("getList", it)
 		}.getOrNull()
@@ -743,12 +744,17 @@ internal class TVBoxQuickJsSpiderRuntime(
 		)
 		val category = node.firstNonBlank("type_name", "vod_class", "class")
 		val remarks = node.firstNonBlank("vod_remarks", "remarks", "note")
+		val content = node.firstNonBlank("vod_content", "content", "vod_blurb")
+		val authors = TVBoxVodMetadata.parseAuthors(
+			node.firstNonBlank("vod_actor", "actor")
+				?: TVBoxVodMetadata.findActorCredits(content),
+		)
 		val tags = buildSet {
 			category?.let { add(ContentTag(it, "category:${it.lowercase()}", source)) }
 			remarks?.let { add(ContentTag(it, "remark:${it.lowercase()}", source)) }
 		}
 		val description = buildString {
-			node.firstNonBlank("vod_content", "content", "vod_blurb")?.let {
+			content?.let {
 				append(it)
 			}
 			node.firstNonBlank("vod_year", "year")?.takeIf { it.isNotBlank() }?.let {
@@ -774,6 +780,7 @@ internal class TVBoxQuickJsSpiderRuntime(
 			coverUrl = cover,
 			description = description,
 			tags = tags,
+			authors = authors,
 		)
 	}
 
@@ -852,6 +859,7 @@ internal class TVBoxQuickJsSpiderRuntime(
 			coverUrl = seed.coverUrl ?: seed.largeCoverUrl,
 			description = mergeDescription(seed.description, message),
 			tags = seed.tags,
+			authors = seed.authors,
 		)
 		val chapters = listOf(
 			ContentChapter(
@@ -1402,6 +1410,7 @@ internal class TVBoxQuickJsSpiderRuntime(
 		val coverUrl: String?,
 		val description: String?,
 		val tags: Set<ContentTag>,
+		val authors: Set<String>,
 	) {
 		fun toContent(source: JsonContentSource): Content = Content(
 			id = id,
@@ -1415,7 +1424,7 @@ internal class TVBoxQuickJsSpiderRuntime(
 			largeCoverUrl = coverUrl,
 			tags = tags,
 			state = null,
-			authors = emptySet(),
+			authors = authors,
 			description = description,
 			chapters = null,
 			source = source,

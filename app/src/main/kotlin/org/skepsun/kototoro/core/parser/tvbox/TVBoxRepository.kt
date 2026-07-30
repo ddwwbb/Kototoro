@@ -81,7 +81,7 @@ class TVBoxRepository(
 	override var defaultSortOrder: SortOrder = SortOrder.ALPHABETICAL
 
 	override val listPagingMode: ContentRepository.ListPagingMode
-		get() = if (mightBeCmsSource()) {
+		get() = if (spiderRuntime != null || mightBeCmsSource()) {
 			ContentRepository.ListPagingMode.PAGE_INDEX
 		} else {
 			ContentRepository.ListPagingMode.OFFSET
@@ -92,6 +92,7 @@ class TVBoxRepository(
 		isMultipleTagsSupported = true,
 		isTagsExclusionSupported = true,
 		isSearchWithFiltersSupported = true,
+		isAuthorSearchSupported = true,
 	)
 
 	override suspend fun getList(
@@ -99,11 +100,13 @@ class TVBoxRepository(
 		order: SortOrder?,
 		filter: ContentListFilter?,
 	): List<Content> {
+		val searchTerm = TVBoxListSupport.searchTerm(filter)
 		Log.i(
 			TAG,
-			"getList start for ${source.name}: offset=$offset order=${order ?: defaultSortOrder} query=${filter?.query.orEmpty()} runtime=${spiderRuntime?.id ?: "none"}",
+			"getList start for ${source.name}: offset=$offset order=${order ?: defaultSortOrder} " +
+				"query=$searchTerm runtime=${spiderRuntime?.id ?: "none"}",
 		)
-		val shouldPreferCmsSearch = mightBeCmsSource() && !filter?.query.isNullOrBlank()
+		val shouldPreferCmsSearch = mightBeCmsSource() && searchTerm.isNotBlank()
 		if (!shouldPreferCmsSearch) {
 			spiderRuntime?.getList(offset, order, filter)?.let {
 				Log.i(TAG, "getList resolved by spider runtime for ${source.name}: count=${it.size}")
@@ -129,7 +132,7 @@ class TVBoxRepository(
 			return emptyList()
 		}
 		val catalog = loadCatalog()
-		val query = filter?.query?.trim().orEmpty()
+		val query = searchTerm
 		val includeTags = filter?.tags?.map { it.key }?.toSet().orEmpty()
 		val excludeTags = filter?.tagsExclude?.map { it.key }?.toSet().orEmpty()
 		val filtered = catalog.items.asSequence()
@@ -338,7 +341,7 @@ class TVBoxRepository(
 		filter: ContentListFilter?,
 	): List<Content> {
 		val page = offset + 1
-		val query = filter?.query?.trim().orEmpty()
+		val query = TVBoxListSupport.searchTerm(filter)
 		val selectedCategoryId = filter?.tags
 			?.firstNotNullOfOrNull { tag -> parseCmsTagId(tag.key) }
 		val requestUrls = buildCmsListUrls(provider.candidate.url, page, query, selectedCategoryId)

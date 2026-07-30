@@ -113,7 +113,7 @@ internal class TVBoxJarSpiderRuntime(
 	): List<Content>? {
 		val spider = getSpiderOrNull() ?: return null
 		val page = offset + 1
-		val query = filter?.query?.trim().orEmpty()
+		val query = TVBoxListSupport.searchTerm(filter)
 		val selectedCategoryId = filter?.tags
 			?.firstNotNullOfOrNull { tag -> parseCategoryTagId(tag.key) }
 		return runCatching {
