@@ -123,10 +123,10 @@ npm run docs:build
 - **Kotlin** 2.2.10 / **AGP** 8.12.0 / **Gradle** 9.0.0（使用 `gradle/libs.versions.toml` 版本目录）
 - **compileSdk** 36 / **minSdk** 26 / **targetSdk** 36
 - **JVM 目标**: Java 11（开启 desugaring 以使用现代 API）
-- **UI**: Jetpack Compose + Material3 + ViewBinding（混合过渡期）
+- **UI**: Jetpack Compose + Material3（Compose-first 端到端，阅读器与视频播放器亦为 Compose；旧 XML/Fragment/混合过渡层已基本清空，仅 ViewBinding 残留于尚未迁移处）
 - **数据库**: Room 2.7.2，KSP 代码生成
 - **DI**: Hilt/Dagger（dagger 2.57.2，hilt-gradle-plugin 1.3.0）
-- **网络**: OkHttp 5.2.1
+- **网络**: OkHttp 5.4.0
 - **原生代码**: `app/src/main/cpp/CMakeLists.txt`（CMake 3.22.1，4 种 ABI）
 - **序列化**: kotlinx.serialization
 - **测试**: JUnit5 + Kotest + MockK + MockWebServer
@@ -209,9 +209,14 @@ npm run docs:build
 - 自动回退到完整 APK 下载
 
 **数据库**：
-- Room 数据库（`MangaDatabase`），DATABASE_VERSION = 40，schema 位于 `app/schemas/org.skepsun.kototoro.core.db.MangaDatabase/`
-- 迁移文件 `core/db/migrations/Migration1To2.kt` 到 `Migration39To40.kt`
+- Room 数据库（`MangaDatabase`），DATABASE_VERSION = 76，schema 位于 `app/schemas/org.skepsun.kototoro.core.db.MangaDatabase/`
+- 迁移文件 `core/db/migrations/Migration1To2.kt` 到 `Migration75To76.kt`（含 `Migration24To23` 回退迁移）
 - 使用 KSP 生成 Kotlin 代码
+
+**Entity 系统（作品身份层）**（参考 `docs/architecture/entity-graph-implementation-plan.md` 与 `entitygraph/` 模块）：
+- 这是统一漫画/小说/视频数据模型的核心抽象：用稳定"作品身份"（entity）聚合来自不同源、不同内容类型的投影（projection）
+- 收藏、历史、追踪、书签、统计均挂在 entity 之上，而非直接挂在各源的原始条目上，使跨源去重与换源后状态保留成为可能
+- 修改任何与"作品"相关的数据流（收藏、历史、追踪匹配）前，先确认数据是写到 entity 还是源投影，避免破坏身份一致性
 
 **依赖注入**：
 - Hilt/Dagger 用于依赖注入
