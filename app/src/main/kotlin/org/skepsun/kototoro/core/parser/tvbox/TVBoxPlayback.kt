@@ -1,8 +1,17 @@
 package org.skepsun.kototoro.core.parser.tvbox
 
+import java.net.URLDecoder
+import java.net.URLEncoder
 import java.util.Locale
 
 internal object TVBoxPlayback {
+
+	private const val HTML_SNIFF_FRAGMENT_PREFIX = "kototoro-sniff="
+
+	data class HtmlSniffRequest(
+		val url: String,
+		val clickSelector: String?,
+	)
 
 	private val directMediaMarkers = listOf(
 		".m3u8",
@@ -69,6 +78,9 @@ internal object TVBoxPlayback {
 	}
 
 	fun looksLikeHtmlPlaybackPage(value: String): Boolean {
+		if (parseHtmlSniffRequest(value) != null) {
+			return true
+		}
 		val normalized = normalizeLocator(value)
 		val lower = normalized.lowercase(Locale.ROOT)
 		if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
@@ -93,5 +105,31 @@ internal object TVBoxPlayback {
 			.replace("\\/", "/")
 			.replace("\\u0026", "&")
 			.replace("&amp;", "&")
+	}
+
+	fun markHtmlPlaybackPage(value: String, clickSelector: String?): String {
+		val request = parseHtmlSniffRequest(value)
+		val pageUrl = request?.url ?: normalizeLocator(value)
+		val selector = clickSelector?.trim().orEmpty()
+		val fragment = HTML_SNIFF_FRAGMENT_PREFIX + URLEncoder.encode(selector, Charsets.UTF_8.name())
+		return "${pageUrl.substringBefore('#')}#$fragment"
+	}
+
+	fun parseHtmlSniffRequest(value: String): HtmlSniffRequest? {
+		val normalized = normalizeLocator(value)
+		val fragment = normalized.substringAfter('#', missingDelimiterValue = "")
+		if (!fragment.startsWith(HTML_SNIFF_FRAGMENT_PREFIX)) {
+			return null
+		}
+		val selector = URLDecoder.decode(
+			fragment.removePrefix(HTML_SNIFF_FRAGMENT_PREFIX),
+			Charsets.UTF_8.name(),
+		)
+			.trim()
+			.ifBlank { null }
+		return HtmlSniffRequest(
+			url = normalized.substringBefore('#'),
+			clickSelector = selector,
+		)
 	}
 }

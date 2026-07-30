@@ -20,10 +20,10 @@ jobs:
       contents: read
 
     steps:
-      - name: Checkout devel
+      - name: Checkout develop
         uses: actions/checkout@v4
         with:
-          ref: devel
+          ref: develop
           submodules: recursive
 
       - name: Set up JDK 17
@@ -87,7 +87,7 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$GH_TOKEN"
-          notes="Automated Nightly build from devel at ${GITHUB_SHA}."
+          notes="Automated Nightly build from develop at ${GITHUB_SHA}."
 
           if gh release view "$TAG_NAME" --repo "$NIGHTLY_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG_NAME" release/*.apk \

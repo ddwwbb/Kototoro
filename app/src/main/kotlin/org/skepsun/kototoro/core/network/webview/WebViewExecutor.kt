@@ -51,6 +51,7 @@ import java.lang.ref.WeakReference
 import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
 import javax.inject.Provider
@@ -846,12 +847,14 @@ class WebViewExecutor @Inject constructor(
 		timeoutMs: Long = 20000,
 	): SniffedMediaResult? = mutex.withLock {
 		withContext(Dispatchers.Main.immediate) {
+			val sniffRequest = TVBoxPlayback.parseHtmlSniffRequest(url)
+			val pageUrl = sniffRequest?.url ?: url
 			val webView = obtainWebView()
 			try {
 				webView.configureForParser(headers?.get(CommonHeaders.USER_AGENT), blockImages = true)
 				withTimeout(timeoutMs) {
 					suspendCancellableCoroutine { cont ->
-						val pageFinished = AtomicBoolean(false)
+						val pageGeneration = AtomicInteger(0)
 						val candidateUrl = AtomicReference<String?>(null)
 
 						fun tryResume(result: SniffedMediaResult?) {
@@ -865,7 +868,7 @@ class WebViewExecutor @Inject constructor(
 							if (candidateUrl.compareAndSet(null, normalized)) {
 								val mergedHeaders = headers.orEmpty().toMutableMap()
 								if (!mergedHeaders.keys.any { it.equals(CommonHeaders.REFERER, ignoreCase = true) }) {
-									mergedHeaders[CommonHeaders.REFERER] = url
+									mergedHeaders[CommonHeaders.REFERER] = pageUrl
 								}
 								CookieManager.getInstance().getCookie(normalized)?.takeIf { it.isNotBlank() }?.let { cookie ->
 									mergedHeaders[CommonHeaders.COOKIE] = cookie
@@ -881,12 +884,27 @@ class WebViewExecutor @Inject constructor(
 							}
 
 							override fun onPageFinished(view: WebView?, loadedUrl: String?) {
-								if (!pageFinished.compareAndSet(false, true)) {
-									return
-								}
+								val generation = pageGeneration.incrementAndGet()
 								kotlinx.coroutines.CoroutineScope(cont.context).launch(Dispatchers.Main.immediate) {
-									kotlinx.coroutines.delay(delayMs)
+									val clickSelector = sniffRequest?.clickSelector
+									if (clickSelector == null) {
+										kotlinx.coroutines.delay(delayMs)
+									} else {
+										val attempts = (delayMs / 500L).toInt().coerceIn(1, 12)
+										repeat(attempts) {
+											if (!cont.isActive || candidateUrl.get() != null ||
+												generation != pageGeneration.get()
+											) {
+												return@launch
+											}
+											webView.evaluateJavascript(buildPlaybackClickScript(clickSelector), null)
+											kotlinx.coroutines.delay(500L)
+										}
+									}
 									if (!cont.isActive || candidateUrl.get() != null) {
+										return@launch
+									}
+									if (generation != pageGeneration.get()) {
 										return@launch
 									}
 									val html = suspendCancellableCoroutine<String> { htmlCont ->
@@ -904,9 +922,9 @@ class WebViewExecutor @Inject constructor(
 							}
 						}
 						if (!headers.isNullOrEmpty()) {
-							webView.loadUrl(url, headers)
+							webView.loadUrl(pageUrl, headers)
 						} else {
-							webView.loadUrl(url)
+							webView.loadUrl(pageUrl)
 						}
 					}
 				}
@@ -914,6 +932,41 @@ class WebViewExecutor @Inject constructor(
 				webView.reset()
 			}
 		}
+	}
+
+	private fun buildPlaybackClickScript(selector: String): String {
+		val selectorLiteral = JSONObject.quote(selector)
+		return """
+			(() => {
+			  if (window.__kototoroPlaybackTriggered) return true;
+			  window.open = function() { return null; };
+			  const target = document.querySelector($selectorLiteral);
+			  if (!target) return false;
+			  try {
+			    const jq = window.jQuery;
+			    const handlers = jq && jq._data ? jq._data(target, "events") : null;
+			    const nativeClick = handlers && handlers.click && handlers.click[0] && handlers.click[0].handler;
+			    if (typeof nativeClick === "function") {
+			      nativeClick.call(target, {
+			        target: target,
+			        currentTarget: target,
+			        preventDefault() {},
+			        stopPropagation() {},
+			        stopImmediatePropagation() {},
+			        originalEvent: { isTrusted: true }
+			      });
+			    } else {
+			      target.click();
+			    }
+			    window.__kototoroPlaybackTriggered = true;
+			    return true;
+			  } catch (_) {
+			    target.click();
+			    window.__kototoroPlaybackTriggered = true;
+			    return true;
+			  }
+			})()
+		""".trimIndent()
 	}
 
 	private suspend fun obtainWebView(): WebView {

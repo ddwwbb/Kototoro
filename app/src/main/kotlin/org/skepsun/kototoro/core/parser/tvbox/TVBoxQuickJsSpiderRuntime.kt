@@ -75,8 +75,10 @@ internal class TVBoxQuickJsSpiderRuntime(
 	override fun describeUnavailability(config: TVBoxStoredConfig): String? {
 		val scriptLocator = resolveScriptLocator()
 		return when {
-			scriptLocator == null -> "TVBox type=4 JS spider has no resolvable script entry in api/ext"
-			scriptLocator.startsWith("//bb", ignoreCase = true) -> "TVBox //bb QuickJS bytecode is not supported by the current bridge"
+			scriptLocator == null && resolveInlineScript() == null ->
+				"TVBox type=4 JS spider has no resolvable script entry in api/ext"
+			scriptLocator?.startsWith("//bb", ignoreCase = true) == true ->
+				"TVBox //bb QuickJS bytecode is not supported by the current bridge"
 			else -> "Advanced TVBox JS features such as ES modules, cat.js dependencies, and js2Proxy are not fully supported yet"
 		}
 	}
@@ -136,26 +138,19 @@ internal class TVBoxQuickJsSpiderRuntime(
 						source = source,
 					),
 				)
-			val directLocator = TVBoxPlayback.normalizeLocator(locator.id)
-			if (directLocator.startsWith("http://", ignoreCase = true) || directLocator.startsWith("https://", ignoreCase = true)) {
-				return listOf(
-					ContentPage(
-						id = positiveHash("${chapter.url}|page"),
-						url = directLocator,
-						preview = null,
-						headers = buildHeadersForUrl(directLocator, emptyMap()),
-						source = source,
-					),
-				)
-			}
 			val playResult = loadPlay(locator.flag, locator.id)
 			val finalUrl = TVBoxPlayback.normalizeLocator(
 				playResult?.url?.takeIf { it.isNotBlank() } ?: locator.id,
 			)
+			val playbackUrl = if (playResult?.parse == true || playResult?.clickSelector != null) {
+				TVBoxPlayback.markHtmlPlaybackPage(finalUrl, playResult.clickSelector)
+			} else {
+				finalUrl
+			}
 			listOf(
 				ContentPage(
 					id = positiveHash("${chapter.url}|page"),
-					url = finalUrl,
+					url = playbackUrl,
 					preview = null,
 					headers = buildHeadersForUrl(finalUrl, playResult?.headers.orEmpty()),
 					source = source,
@@ -306,7 +301,9 @@ internal class TVBoxQuickJsSpiderRuntime(
 		action: String,
 		argsLiteral: String,
 	): String? {
-		val scriptLocator = resolveScriptLocator() ?: return null
+		val scriptLocator = resolveScriptLocator()
+			?: resolveInlineScript()?.let { "<inline-tvbox-script>" }
+			?: return null
 		val executableScript = buildExecutableScript(scriptLocator) ?: return null
 		val initLiteral = buildInitArgumentLiteral()
 		return createQuickJs().use { qjs ->
@@ -386,12 +383,21 @@ internal class TVBoxQuickJsSpiderRuntime(
 	}
 
 	private suspend fun buildExecutableScript(scriptLocator: String): String? {
-		val resolvedLocator = resolveCandidateUrl(scriptLocator) ?: scriptLocator.extractPrimaryUrl()
-		if (resolvedLocator.isNullOrBlank()) {
+		val inlineScript = resolveInlineScript()
+		val resolvedLocator = if (inlineScript == null) {
+			resolveCandidateUrl(scriptLocator) ?: scriptLocator.extractPrimaryUrl()
+		} else {
+			null
+		}
+		if (inlineScript == null && resolvedLocator.isNullOrBlank()) {
 			logQuickJsFailure("loadScript", null, "unresolved_locator=$scriptLocator")
 			return null
 		}
-		val scriptContent = readTextResource(resolvedLocator, buildHeadersForUrl(resolvedLocator, emptyMap()))
+		val scriptContent = inlineScript
+			?: readTextResource(
+				checkNotNull(resolvedLocator),
+				buildHeadersForUrl(resolvedLocator, emptyMap()),
+			)
 		val normalized = scriptContent.removePrefix("\uFEFF").trimStart()
 		if (normalized.startsWith("//bb")) {
 			logQuickJsFailure("loadScript", null, "unsupported_bytecode=$resolvedLocator")
@@ -516,6 +522,25 @@ internal class TVBoxQuickJsSpiderRuntime(
 		}.uppercase()
 		val headers = options.optHeaderMapFlexible("headers")
 		val bufferMode = options.optInt("buffer", 0)
+		val useWebView = options.optBoolean("webView", options.optBoolean("webview", false))
+		if (useWebView) {
+			val response = httpClient.getWithWebView(
+				url = url,
+				headers = headers,
+				delayMs = options.optLong("delayMs", 2500L).coerceIn(0L, 15000L),
+				webJs = options.optString("webJs").trim().ifBlank { null },
+				blockImages = options.optBoolean("blockImages", true),
+			)
+			return JSONObject().apply {
+				put("ok", response.code?.let { it in 200..299 } == true)
+				put("status", response.code)
+				put("code", response.code)
+				put("url", response.url)
+				put("content", response.body)
+				put("body", response.body)
+				put("headers", JSONObject(response.headers))
+			}
+		}
 		val response = when (method) {
 			"POST" -> {
 				val bodyValue = when {
@@ -894,6 +919,8 @@ internal class TVBoxQuickJsSpiderRuntime(
 		return TVBoxPlayResult(
 			url = url,
 			headers = root.optHeaderMap("header").ifEmpty { root.optHeaderMap("headers") },
+			parse = root.optInt("parse", 0) != 0,
+			clickSelector = root.firstNonBlank("click", "clickSelector"),
 		)
 	}
 
@@ -1160,6 +1187,11 @@ internal class TVBoxQuickJsSpiderRuntime(
 		}
 	}
 
+	private fun resolveInlineScript(): String? {
+		val ext = config.site.ext as? JSONObject ?: return null
+		return ext.optString("inlineScript").trim().ifBlank { null }
+	}
+
 	private fun resolveCandidateUrl(rawValue: String?): String? {
 		val value = rawValue?.trim().orEmpty().extractPrimaryUrl()
 		if (value.isBlank()) {
@@ -1412,6 +1444,8 @@ internal class TVBoxQuickJsSpiderRuntime(
 	private data class TVBoxPlayResult(
 		val url: String,
 		val headers: Map<String, String>,
+		val parse: Boolean,
+		val clickSelector: String?,
 	)
 
 	private data class TVBoxProxyResult(
