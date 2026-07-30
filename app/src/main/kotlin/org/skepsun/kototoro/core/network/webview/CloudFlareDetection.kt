@@ -23,3 +23,33 @@ internal const val CF_STATE_JS = """
 		} catch (e) { return 'wait'; }
 	})()
 """
+
+internal suspend fun waitForCloudFlarePage(
+	maxPolls: Int,
+	readState: suspend () -> String?,
+	waitForNextPoll: suspend () -> Unit,
+	shouldContinue: () -> Boolean = { true },
+): Boolean {
+	require(maxPolls > 0) { "maxPolls must be positive" }
+	repeat(maxPolls) { index ->
+		if (!shouldContinue()) {
+			return false
+		}
+		when (readState().normalizeCloudFlareState()) {
+			"ok" -> return true
+			"error" -> return false
+		}
+		if (index < maxPolls - 1) {
+			waitForNextPoll()
+		}
+	}
+	return false
+}
+
+private fun String?.normalizeCloudFlareState(): String {
+	return this
+		?.trim()
+		?.removeSurrounding("\"")
+		?.lowercase()
+		.orEmpty()
+}

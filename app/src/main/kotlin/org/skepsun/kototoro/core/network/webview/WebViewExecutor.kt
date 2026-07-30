@@ -566,7 +566,13 @@ class WebViewExecutor @Inject constructor(
 						}
 					}
 
-					// Wait for initial JavaScript to execute
+					val pageReady = waitForWebViewPageReady(webView)
+					if (!pageReady) {
+						Log.w(TAG, "WebView page did not leave Cloudflare challenge before extraction: $url")
+						return@withTimeout ""
+					}
+
+					// Wait for target-page JavaScript to execute
 					kotlinx.coroutines.delay(delayMs)
 					
 					val extractionJs = webJs?.takeIf { it.isNotBlank() } ?: "document.documentElement.outerHTML"
@@ -844,7 +850,7 @@ class WebViewExecutor @Inject constructor(
 		url: String,
 		headers: Map<String, String>? = null,
 		delayMs: Long = 2500,
-		timeoutMs: Long = 20000,
+		timeoutMs: Long = 45000,
 	): SniffedMediaResult? = mutex.withLock {
 		withContext(Dispatchers.Main.immediate) {
 			val sniffRequest = TVBoxPlayback.parseHtmlSniffRequest(url)
@@ -886,6 +892,18 @@ class WebViewExecutor @Inject constructor(
 							override fun onPageFinished(view: WebView?, loadedUrl: String?) {
 								val generation = pageGeneration.incrementAndGet()
 								kotlinx.coroutines.CoroutineScope(cont.context).launch(Dispatchers.Main.immediate) {
+									val pageReady = waitForWebViewPageReady(
+										webView = webView,
+										maxWaitMs = minOf(MAX_CHALLENGE_MS, timeoutMs),
+										shouldContinue = {
+											cont.isActive &&
+												candidateUrl.get() == null &&
+												generation == pageGeneration.get()
+										},
+									)
+									if (!pageReady) {
+										return@launch
+									}
 									val clickSelector = sniffRequest?.clickSelector
 									if (clickSelector == null) {
 										kotlinx.coroutines.delay(delayMs)
@@ -932,6 +950,32 @@ class WebViewExecutor @Inject constructor(
 				webView.reset()
 			}
 		}
+	}
+
+	private suspend fun waitForWebViewPageReady(
+		webView: WebView,
+		maxWaitMs: Long = MAX_CHALLENGE_MS,
+		shouldContinue: () -> Boolean = { true },
+	): Boolean {
+		val maxPolls = ((maxWaitMs + CHALLENGE_POLL_INTERVAL_MS - 1) / CHALLENGE_POLL_INTERVAL_MS)
+			.toInt()
+			.coerceAtLeast(1)
+		return waitForCloudFlarePage(
+			maxPolls = maxPolls,
+			readState = {
+				suspendCancellableCoroutine { cont ->
+					webView.evaluateJavascript(CF_STATE_JS) { raw ->
+						if (cont.isActive) {
+							cont.resume(raw)
+						}
+					}
+				}
+			},
+			waitForNextPoll = {
+				kotlinx.coroutines.delay(CHALLENGE_POLL_INTERVAL_MS)
+			},
+			shouldContinue = shouldContinue,
+		)
 	}
 
 	private fun buildPlaybackClickScript(selector: String): String {

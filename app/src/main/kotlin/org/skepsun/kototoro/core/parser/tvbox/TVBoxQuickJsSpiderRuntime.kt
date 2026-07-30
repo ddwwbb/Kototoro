@@ -520,7 +520,7 @@ internal class TVBoxQuickJsSpiderRuntime(
 		val method = options.optString("method").ifBlank {
 			options.optString("http_method", "GET")
 		}.uppercase()
-		val headers = options.optHeaderMapFlexible("headers")
+		val headers = buildHeadersForUrl(url, options.optHeaderMapFlexible("headers"))
 		val bufferMode = options.optInt("buffer", 0)
 		val useWebView = options.optBoolean("webView", options.optBoolean("webview", false))
 		if (useWebView) {
