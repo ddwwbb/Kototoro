@@ -11,6 +11,7 @@
     <string name="network_error">Network error</string>
     <string name="details">Details</string>
     <string name="chapters">Chapters</string>
+    <string name="video_chapter_group_ungrouped">Ungrouped</string>
     <string name="list">List</string>
     <string name="detailed_list">Detailed list</string>
     <string name="grid">Grid</string>
@@ -1519,6 +1520,7 @@
     <string name="available_d">Available: %1$d</string>
     <string name="disable_nsfw_summary">Disable NSFW sources and hide adult manga from list if possible</string>
     <string name="adult_content_filtering">Adult content filtering</string>
+    <string name="disable_sources_and_browse_nsfw">Hide from sources and browse content</string>
     <string name="disable_history_nsfw">Hide from History</string>
     <string name="disable_history_nsfw_summary">Hide adult contents from History</string>
     <string name="disable_favourites_nsfw">Hide from Favourites</string>
@@ -1530,8 +1532,10 @@
     <string name="disable_suggestions_nsfw">Hide from Suggestions</string>
     <string name="disable_suggestions_nsfw_summary">Hide adult contents from Suggestions</string>
     <string name="state_paused">Paused</string>
-    <string name="reader_optimize">Reduce memory consumption (beta)</string>
-    <string name="reader_optimize_summary">Reduce offscreen pages quality to use less memory</string>
+    <string name="reader_optimize">Limit image memory cache (beta)</string>
+    <string name="reader_optimize_summary">Disable memory caching for animated, cropped, split, and other fallback images. Telephoto tile loading is always active and is not controlled by this option</string>
+    <string name="reader_reduce_page_preloading">Reduce page preloading (beta)</string>
+    <string name="reader_reduce_page_preloading_summary">Keep fewer pages outside the viewport. This does not reduce visible image quality, but adjacent pages may take longer to appear</string>
     <string name="reader_translation_enabled">Auto translate pages</string>
     <string name="reader_translation_enabled_summary">Use on-device OCR and translation, with optional API fallback</string>
     <string name="reader_translation_action">Manga translation</string>
