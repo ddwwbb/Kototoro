@@ -9,8 +9,7 @@
 
 这违反 [entity-identity-migration-consolidation-plan-2026-06.md](./entity-identity-migration-consolidation-plan-2026-06.md) 中“实体只包含同类型投影”的约定，也违反该计划关于禁止仅凭标题相似度自动确认身份的硬性约束。
 
-本文档记录已通过代码检查和测试验证的事实、完整复现链路、修复边界以及对应 Trellis 任务：
-`.trellis/tasks/07-16-work-content-type-isolation/`。
+本文档记录已通过代码检查和测试验证的事实、完整复现链路与修复边界。
 
 ## 用户可复现现象
 
@@ -218,9 +217,8 @@ repair 复用现有 `splitLocalWorkProjection` 能力，同时：
 - 根因定位：已完成
 - 详情页投影泄漏链路：已完成
 - 修复边界：已完成
-- Trellis 任务：`.trellis/tasks/07-16-work-content-type-isolation/`，当前为 `in_progress`
 - Entity schema、Room 74 → 75、resolver/matcher/merge guard、backup/sync 字段贯通：已实现
 - 详情页按当前投影类型和 Space 过滤：已实现，作为历史脏数据的运行时防线
 - 混合类型 Work 诊断与实体整理页顶部一键拆分：已实现
 - repair 拆分中的 `sync_id` 唯一冲突保护：已实现并补充单测
-- 剩余工作：补齐迁移/repair/restore 的回归测试并执行 Trellis quality check
+- 剩余工作：补齐迁移/repair/restore 的回归测试并执行质量检查

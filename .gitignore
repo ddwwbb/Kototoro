@@ -60,10 +60,3 @@ reasonix.toml
 /.agents/
 /.codex/agents/
 /.codex/config.toml
-
-# Trellis developer-local state
-/.trellis/
-/.trellis/workspace/
-/.trellis/.runtime/
-/.trellis/.developer
-/.trellis/.current-task
