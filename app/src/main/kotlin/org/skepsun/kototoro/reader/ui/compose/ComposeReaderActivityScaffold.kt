@@ -9,13 +9,17 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
@@ -35,13 +39,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.SheetValue
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -64,11 +66,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
@@ -89,9 +94,13 @@ import org.skepsun.kototoro.R
 import org.skepsun.kototoro.details.ui.compose.DETAILS_TAB_BOOKMARKS
 import org.skepsun.kototoro.details.ui.compose.DETAILS_TAB_CHAPTERS
 import org.skepsun.kototoro.details.ui.compose.DETAILS_TAB_PAGES
+import org.skepsun.kototoro.details.ui.pager.chapters.compose.ChapterSelectionBar
+import org.skepsun.kototoro.details.ui.pager.chapters.compose.ChapterSelectionUiState
 import org.skepsun.kototoro.core.prefs.InterfaceStyle
+import org.skepsun.kototoro.core.prefs.ReaderControl
 import org.skepsun.kototoro.core.ui.compose.LocalLiquidGlassBackdrop
 import org.skepsun.kototoro.core.ui.compose.LocalLiquidGlassLayerBackdrop
+import org.skepsun.kototoro.core.ui.compose.KototoroLoadingIndicator
 import org.skepsun.kototoro.core.ui.compose.ImmersiveEdgeGradient
 import org.skepsun.kototoro.core.ui.compose.toTransparentImmersiveColor
 import org.skepsun.kototoro.core.ui.glass.GlassComponentRole
@@ -130,7 +139,6 @@ internal data class ComposeReaderChromeState(
 	val toolsVisible: Boolean = false,
 	val chaptersVisible: Boolean = false,
 	val chapterPanel: ReaderChapterPanelUiState = ReaderChapterPanelUiState(),
-	val translationTaskPanelVisible: Boolean = false,
 )
 
 @Immutable
@@ -414,7 +422,7 @@ private fun ReaderChapterPanelMenuItem(
 	)
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 internal fun ComposeReaderActivityScaffold(
 	state: ComposeReaderChromeState,
@@ -423,16 +431,12 @@ internal fun ComposeReaderActivityScaffold(
 	infoBarEmbedded: Boolean = false,
 	modifier: Modifier = Modifier,
 	chapterPanelTabId: Int = DETAILS_TAB_CHAPTERS,
-	chaptersPanelContent: @Composable (Int, ReaderChapterPanelUiState) -> Unit = { _, _ -> },
+	chaptersPanelContent: @Composable (Int, ReaderChapterPanelUiState, (ChapterSelectionUiState?) -> Unit) -> Unit =
+		{ _, _, _ -> },
 	translationTaskPanelContent: @Composable () -> Unit = {},
 	content: @Composable () -> Unit,
 ) {
-	val chaptersSheetState = androidx.compose.material3.rememberModalBottomSheetState(
-		skipPartiallyExpanded = false,
-	)
-	val optionsSheetState = androidx.compose.material3.rememberModalBottomSheetState(
-		skipPartiallyExpanded = false,
-	)
+	var chapterSelectionState by remember { mutableStateOf<ChapterSelectionUiState?>(null) }
 	BackHandler { callbacks.onBackPressed() }
 	val isIosStyle = LocalInterfaceStyle.current == InterfaceStyle.IOS
 	val immersiveBaseColor = if (isSystemInDarkTheme()) Color.Black else Color.White
@@ -527,8 +531,9 @@ internal fun ComposeReaderActivityScaffold(
 
 		AnimatedVisibility(
 			visible = state.controlsVisible && state.actions.sliderEnabled,
-			enter = slideInVertically { it } + fadeIn(),
-			exit = slideOutVertically { it } + fadeOut(),
+			// Alpha transitions clip the rounded Backdrop shadow to a rectangular layer.
+			enter = slideInVertically { it },
+			exit = slideOutVertically { it },
 			modifier = Modifier
 				.align(Alignment.BottomCenter)
 				.navigationBarsPadding()
@@ -543,75 +548,80 @@ internal fun ComposeReaderActivityScaffold(
 			}
 		}
 
+		val floatingControls = resolveReaderFloatingControls(
+			configured = state.actions.controls,
+			translationAvailable = state.actions.translateRequestedVisible,
+			translationContextualVisible = state.actions.translateContextualVisible,
+		)
+		val floatingControlExitOffset = with(LocalDensity.current) { 32.dp.roundToPx() }
 		AnimatedVisibility(
-			visible = state.controlsVisible &&
-				!state.chaptersVisible &&
-				state.actions.translateRequestedVisible &&
-				state.actions.translateContextualVisible,
-			enter = fadeIn(),
-			exit = fadeOut(),
+			visible = state.controlsVisible && !state.chaptersVisible && floatingControls.isNotEmpty(),
+			// Keep Backdrop shadows out of the alpha layer used by fade transitions.
+			enter = slideInHorizontally { it + floatingControlExitOffset },
+			exit = slideOutHorizontally { it + floatingControlExitOffset },
 			modifier = Modifier
 				.align(Alignment.BottomEnd)
 				.navigationBarsPadding()
 				.padding(end = 16.dp, bottom = 62.dp),
 		) {
-			ReaderTopControlSurface(
-				shape = CircleShape,
-				modifier = Modifier.size(44.dp),
-			) {
-				IconButton(onClick = callbacks.actions.onTranslate) {
-					Icon(
-						painter = painterResource(R.drawable.ic_translate),
-						contentDescription = state.actions.translateContentDescription.ifEmpty {
-							stringResource(R.string.novel_translate)
-						},
-						tint = if (state.actions.translateActive) {
-							MaterialTheme.colorScheme.primary
-						} else {
-							readerControlContentColor()
-						},
+			Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+				floatingControls.forEach { control ->
+					ReaderFloatingControlButton(
+						control = control,
+						state = state.actions,
+						callbacks = callbacks.actions,
 					)
 				}
 			}
 		}
 
 			if (state.chaptersVisible) {
-				ModalBottomSheet(
+				ReaderAnchoredBottomSheet(
 					onDismissRequest = callbacks.onBackPressed,
-					sheetState = chaptersSheetState,
-					modifier = Modifier.fillMaxHeight(),
-				) {
+				) { sheetDragModifier ->
 					Column(
-						modifier = Modifier
-							.fillMaxWidth()
-							.weight(1f),
+						modifier = Modifier.fillMaxSize(),
 					) {
-						ReaderChapterPanelToolbar(
-							selectedTabId = chapterPanelTabId,
-							isFullyExpanded = chaptersSheetState.currentValue == SheetValue.Expanded,
-							state = state.chapterPanel,
-							callbacks = callbacks.chapterPanel,
-						)
+						val selectionState = chapterSelectionState
+						Box(modifier = sheetDragModifier.fillMaxWidth()) {
+							if (chapterPanelTabId == DETAILS_TAB_CHAPTERS && selectionState != null) {
+								ChapterSelectionBar(
+									state = selectionState,
+									modifier = Modifier.height(52.dp),
+								)
+							} else {
+								ReaderChapterPanelToolbar(
+									selectedTabId = chapterPanelTabId,
+									isFullyExpanded = true,
+									state = state.chapterPanel,
+									callbacks = callbacks.chapterPanel,
+								)
+							}
+						}
 						Box(modifier = Modifier.weight(1f)) {
-							chaptersPanelContent(chapterPanelTabId, state.chapterPanel)
+							chaptersPanelContent(
+								chapterPanelTabId,
+								state.chapterPanel,
+								{ chapterSelectionState = it },
+							)
 						}
 					}
 				}
 			}
 
 			if (state.options.visible) {
-				ModalBottomSheet(
+				ReaderAnchoredBottomSheet(
 					onDismissRequest = callbacks.options.onDismiss,
-					sheetState = optionsSheetState,
-					modifier = Modifier.fillMaxHeight(),
-				) {
+				) { sheetDragModifier ->
 					ComposeReaderOptionsSheet(
 						state = state.options,
 						callbacks = callbacks.options,
 						embedded = true,
+						translationTaskPanelContent = translationTaskPanelContent,
+						headerModifier = sheetDragModifier,
 						modifier = Modifier
 							.fillMaxWidth()
-							.weight(1f),
+							.fillMaxSize(),
 					)
 				}
 		}
@@ -666,7 +676,7 @@ internal fun ComposeReaderActivityScaffold(
 					horizontalAlignment = Alignment.CenterHorizontally,
 					modifier = Modifier.padding(20.dp),
 				) {
-					CircularProgressIndicator()
+					KototoroLoadingIndicator()
 					Text(
 						text = stringResource(R.string.loading_),
 						style = MaterialTheme.typography.titleMedium,
@@ -701,7 +711,6 @@ internal fun ComposeReaderActivityScaffold(
 			}
 		}
 
-		translationTaskPanelContent()
 	}
 	}
 }
@@ -881,6 +890,7 @@ private fun ReaderComposeTopBar(
 	onOptions: () -> Unit,
 ) {
 	val contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
+	val chapterControlShape = RoundedCornerShape(24.dp)
 	Box(
 		modifier = Modifier
 			.fillMaxWidth()
@@ -902,11 +912,13 @@ private fun ReaderComposeTopBar(
 			}
 		}
 		ReaderTopControlSurface(
-			shape = RoundedCornerShape(24.dp),
+			shape = chapterControlShape,
 			modifier = Modifier
 				.align(Alignment.Center)
 				.widthIn(min = 148.dp, max = 176.dp)
-				.height(48.dp)
+				.height(48.dp),
+			contentModifier = Modifier
+				.clip(chapterControlShape)
 				.clickable(onClick = onChapters),
 		) {
 			Column(
@@ -946,10 +958,103 @@ private fun ReaderComposeTopBar(
 	}
 }
 
+internal fun resolveReaderFloatingControls(
+	configured: Set<ReaderControl>,
+	translationAvailable: Boolean,
+	translationContextualVisible: Boolean,
+): List<ReaderControl> {
+	val configuredControls = ReaderControl.FLOATING
+		.filter { control -> control in configured && (control != ReaderControl.TRANSLATE || translationAvailable) }
+	if (!translationAvailable || !translationContextualVisible || ReaderControl.TRANSLATE in configuredControls) {
+		return configuredControls.take(ReaderControl.MAX_FLOATING_CONTROLS)
+	}
+	return configuredControls
+		.take(ReaderControl.MAX_FLOATING_CONTROLS - 1)
+		.plus(ReaderControl.TRANSLATE)
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ReaderFloatingControlButton(
+	control: ReaderControl,
+	state: ReaderActionsUiState,
+	callbacks: ReaderActionsCallbacks,
+) {
+	val icon = when (control) {
+		ReaderControl.SCREEN_ROTATION -> if (state.autoRotationEnabled) {
+			R.drawable.ic_screen_rotation_lock
+		} else {
+			R.drawable.ic_screen_rotation
+		}
+		ReaderControl.SAVE_PAGE -> R.drawable.ic_save
+		ReaderControl.TIMER -> if (state.timerActive) R.drawable.ic_timer_run else R.drawable.ic_timer
+		ReaderControl.BOOKMARK -> if (state.bookmarkAdded) R.drawable.ic_bookmark_added else R.drawable.ic_bookmark
+		ReaderControl.TRANSLATE -> R.drawable.ic_translate
+		ReaderControl.DOWNLOAD -> R.drawable.ic_download
+		else -> return
+	}
+	val contentDescription = when (control) {
+		ReaderControl.SCREEN_ROTATION -> stringResource(
+			if (state.autoRotationEnabled) R.string.lock_screen_rotation else R.string.rotate_screen,
+		)
+		ReaderControl.SAVE_PAGE -> stringResource(R.string.save_page)
+		ReaderControl.TIMER -> stringResource(R.string.automatic_scroll)
+		ReaderControl.BOOKMARK -> stringResource(
+			if (state.bookmarkAdded) R.string.bookmark_remove else R.string.bookmark_add,
+		)
+		ReaderControl.TRANSLATE -> state.translateContentDescription.ifEmpty {
+			stringResource(R.string.novel_translate)
+		}
+		ReaderControl.DOWNLOAD -> stringResource(R.string.download)
+		else -> return
+	}
+	val onClick: () -> Unit = when (control) {
+		ReaderControl.SCREEN_ROTATION -> callbacks.onScreenRotation
+		ReaderControl.SAVE_PAGE -> callbacks.onSavePage
+		ReaderControl.TIMER -> { { callbacks.onTimer(false) } }
+		ReaderControl.BOOKMARK -> callbacks.onBookmark
+		ReaderControl.TRANSLATE -> callbacks.onTranslate
+		ReaderControl.DOWNLOAD -> callbacks.onDownload
+		else -> return
+	}
+	val onLongClick: (() -> Unit)? = when (control) {
+		ReaderControl.TIMER -> { { callbacks.onTimer(true) } }
+		ReaderControl.BOOKMARK -> callbacks.onBookmarkLongClick
+		ReaderControl.TRANSLATE -> callbacks.onTranslateLongClick
+		else -> null
+	}
+	val active = when (control) {
+		ReaderControl.TIMER -> state.timerActive
+		ReaderControl.BOOKMARK -> state.bookmarkAdded
+		ReaderControl.TRANSLATE -> state.translateActive
+		else -> false
+	}
+	ReaderTopControlSurface(
+		shape = CircleShape,
+		modifier = Modifier.size(44.dp),
+		contentModifier = Modifier
+			.clip(CircleShape)
+			.combinedClickable(
+				role = Role.Button,
+				onClickLabel = contentDescription,
+				onLongClickLabel = if (onLongClick != null) contentDescription else null,
+				onClick = onClick,
+				onLongClick = onLongClick,
+			),
+	) {
+		Icon(
+			painter = painterResource(icon),
+			contentDescription = contentDescription,
+			tint = if (active) MaterialTheme.colorScheme.primary else readerControlContentColor(),
+		)
+	}
+}
+
 @Composable
 private fun ReaderTopControlSurface(
 	shape: Shape,
 	modifier: Modifier = Modifier,
+	contentModifier: Modifier = Modifier,
 	content: @Composable () -> Unit,
 ) {
 	GlassSurface(
@@ -961,7 +1066,10 @@ private fun ReaderTopControlSurface(
 		),
 		componentRole = GlassComponentRole.TopBar,
 	) {
-		Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+		Box(
+			contentAlignment = Alignment.Center,
+			modifier = Modifier.fillMaxSize().then(contentModifier),
+		) {
 			content()
 		}
 	}

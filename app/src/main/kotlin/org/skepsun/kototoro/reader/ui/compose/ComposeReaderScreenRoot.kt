@@ -5,6 +5,7 @@ import android.view.ViewConfiguration
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
@@ -105,16 +106,27 @@ fun ComposeReaderScreenRoot(
 		}
 	}
 
-	key(mode, isDoublePage, layoutGeneration) {
-	if (isDoublePage) {
-		ComposeDoublePageReader(
+	CompositionLocalProvider(LocalReaderImageScalingQuality provides readerSettings.imageScalingQuality) {
+		key(mode, isDoublePage, layoutGeneration) {
+		if (isDoublePage) {
+			ComposeDoublePageReader(
 			pages = content.pages,
 			initialPage = initialPosition,
 			reverseLayout = mode == ReaderMode.REVERSED,
 			coverPage = readerSettings.isReaderDoubleCoverPage,
 			imageLoader = imageLoader,
 			imagePipeline = imagePipeline,
-			onPagesChanged = { lower, upper ->
+			onPagesChanged = pagesChanged@ { lowerPage, upperPage ->
+				val lower = content.pages.indexOfFirst { it.readerKey == lowerPage.readerKey }
+				val upper = content.pages.indexOfFirst { it.readerKey == upperPage.readerKey }
+				if (lower < 0 || upper < lower) {
+					Log.d(
+						"ReaderDebug",
+						"Ignore stale double page callback lowerKey=${lowerPage.readerKey} " +
+							"upperKey=${upperPage.readerKey} contentPages=${content.pages.size}",
+					)
+					return@pagesChanged
+				}
 				val stateBefore = viewModel.getCurrentState()
 				Log.d(
 					"ReaderDebug",
@@ -161,8 +173,8 @@ fun ComposeReaderScreenRoot(
 			pageOverlay = pageOverlay,
 			modifier = readerModifier,
 		)
-	} else if (mode == ReaderMode.WEBTOON) {
-		ComposeWebtoonReader(
+		} else if (mode == ReaderMode.WEBTOON) {
+			ComposeWebtoonReader(
 			pages = content.pages,
 			initialPage = initialPosition,
 			initialScroll = restoredState?.scroll ?: 0,
@@ -208,7 +220,7 @@ fun ComposeReaderScreenRoot(
 			isCropEnabled = readerSettings.isPagesCropEnabledWebtoon,
 				modifier = readerModifier,
 		)
-	} else ComposePagedReader(
+		} else ComposePagedReader(
 		pages = content.pages,
 		initialPage = initialPosition,
 		mode = mode ?: ReaderMode.STANDARD,
@@ -234,6 +246,7 @@ fun ComposeReaderScreenRoot(
 		zoomMode = readerSettings.zoomMode,
 		isCropEnabled = readerSettings.isPagesCropEnabledStandard,
 		pageOverlay = pageOverlay,
-	)
+		)
+		}
 	}
 }

@@ -6,8 +6,6 @@ import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Bundle
 import android.view.View
-import android.webkit.CookieManager
-import android.webkit.WebStorage
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
@@ -62,6 +60,7 @@ import org.skepsun.kototoro.backups.ui.backup.MihonBackupExportService
 import org.skepsun.kototoro.backups.ui.backup.UsagiBackupExportService
 import org.skepsun.kototoro.backups.ui.periodical.PeriodicalBackupSettingsViewModel
 import org.skepsun.kototoro.backups.ui.restore.ExternalBackupImportService
+import org.skepsun.kototoro.backups.domain.BackupRestoreFormat
 import org.skepsun.kototoro.core.github.AppVersion
 import org.skepsun.kototoro.core.model.ContentSource
 import org.skepsun.kototoro.core.model.getTitle
@@ -310,6 +309,14 @@ class SettingsActivity :
 		}
 	}
 
+	private val legacyBackupSelectCall = registerForActivityResult(
+		ActivityResultContracts.OpenDocument(),
+	) { uri ->
+		if (uri != null) {
+			router.showBackupRestoreDialog(uri, BackupRestoreFormat.KOTATSU_OR_LEGACY_KOTOTORO)
+		}
+	}
+
 	private val externalBackupSelectCall = registerForActivityResult(
 		ActivityResultContracts.OpenDocument(),
 	) { uri ->
@@ -336,6 +343,14 @@ class SettingsActivity :
 		ActivityResultContracts.CreateDocument("application/octet-stream"),
 	) { uri ->
 		if (uri != null && !MihonBackupExportService.start(this, uri)) {
+			Toast.makeText(this, R.string.operation_not_supported, Toast.LENGTH_SHORT).show()
+		}
+	}
+
+	private val kotatsuBackupExportCall = registerForActivityResult(
+		ActivityResultContracts.CreateDocument("application/zip"),
+	) { uri ->
+		if (uri != null && !BackupService.startKotatsuExport(this, uri)) {
 			Toast.makeText(this, R.string.operation_not_supported, Toast.LENGTH_SHORT).show()
 		}
 	}
@@ -631,6 +646,12 @@ class SettingsActivity :
 	}
 
 	fun openDestination(destination: SettingsDestination, args: Bundle?, isFromRoot: Boolean) {
+		if (isFromRoot) {
+			composeNavigationStack.clear()
+			if (destination != SettingsDestination.Root) {
+				composeNavigationStack.addLast(SettingsDestination.Root)
+			}
+		}
 		when (destination) {
 			SettingsDestination.Root -> openComposeDestination(
 				destination,
@@ -671,6 +692,7 @@ class SettingsActivity :
 			is SettingsDestination.UnifiedSources -> openComposeDestination(
 				destination,
 				shouldRestoreFragment = false,
+				pushCurrentToStack = !isFromRoot,
 			)
 		}
 	}
@@ -730,14 +752,10 @@ class SettingsActivity :
 			updateUnifiedSourcesSearchActive(false)
 			unifiedSourcesActivePanel = null
 		}
-		if (isMasterDetails && destination == SettingsDestination.Root) {
-			composeNavigationStack.clear()
-			composeDestination = SettingsDestination.Root
-			setLegacyTopBarVisible(false)
-			return
-		}
 		val currentComposeDestination = composeDestination
-		if (
+		if (destination == SettingsDestination.Root) {
+			composeNavigationStack.clear()
+		} else if (
 			pushCurrentToStack &&
 			shouldKeepComposeHistory() &&
 			currentComposeDestination != null &&
@@ -1053,6 +1071,11 @@ class SettingsActivity :
 							Toast.makeText(this, R.string.operation_not_supported, Toast.LENGTH_SHORT).show()
 						}
 					},
+					onExportKotatsuBackupClick = {
+						if (!kotatsuBackupExportCall.tryLaunch(BackupUtils.generateKotatsuBackupFileName(this))) {
+							Toast.makeText(this, R.string.operation_not_supported, Toast.LENGTH_SHORT).show()
+						}
+					},
 					onExportAniyomiBackupClick = {
 						if (!aniyomiBackupExportCall.tryLaunch(BackupUtils.generateAniyomiBackupFileName(this))) {
 							Toast.makeText(this, R.string.operation_not_supported, Toast.LENGTH_SHORT).show()
@@ -1065,6 +1088,11 @@ class SettingsActivity :
 					},
 					onRestoreBackupClick = {
 						if (!backupSelectCall.tryLaunch(arrayOf("*/*"))) {
+							Toast.makeText(this, R.string.operation_not_supported, Toast.LENGTH_SHORT).show()
+						}
+					},
+					onImportKotatsuOrLegacyBackupClick = {
+						if (!legacyBackupSelectCall.tryLaunch(arrayOf("*/*"))) {
 							Toast.makeText(this, R.string.operation_not_supported, Toast.LENGTH_SHORT).show()
 						}
 					},
@@ -1247,6 +1275,14 @@ class SettingsActivity :
 					settings = kototoroAppSettings,
 					viewModel = sourcesSettingsViewModel,
 					onSetupWizardClick = { router.showWelcomeSheet() },
+					onGlobalTagBlacklistClick = {
+						startActivity(
+							Intent(
+								this,
+								org.skepsun.kototoro.settings.sources.blacklist.GlobalTagBlacklistActivity::class.java,
+							),
+						)
+					},
 				)
 			}
 			is SettingsDestination.UnifiedSources -> {
@@ -1568,12 +1604,15 @@ class SettingsActivity :
 		translationApiFetchModelsJob?.cancel()
 		translationApiFetchModelsJob = lifecycleScope.launch {
 			try {
-				val endpoint = kototoroAppSettings.readerTranslationApiEndpoint.trim()
+				val providerId = kototoroAppSettings.readerTranslationApiProviderPreset
+				val endpoint = TranslationApiProviderCatalog.resolveChatEndpoint(
+					providerId,
+					kototoroAppSettings.readerTranslationApiEndpoint,
+				)
 				if (endpoint.isBlank()) {
 					Toast.makeText(this@SettingsActivity, R.string.reader_translation_api_endpoint_missing, Toast.LENGTH_SHORT).show()
 					return@launch
 				}
-				val providerId = kototoroAppSettings.readerTranslationApiProviderPreset
 				val modelsUrl = TranslationApiSettingsSupport.buildModelsUrl(endpoint, providerId)
 				val key = kototoroAppSettings.readerTranslationApiKey.trim()
 				val models = withContext(Dispatchers.IO) {
@@ -1791,14 +1830,8 @@ class SettingsActivity :
 
 	private fun logoutDiscord() {
 		kototoroAppSettings.discordToken = null
-		val webStorage = WebStorage.getInstance()
-		runCatching { webStorage.deleteOrigin(DISCORD_ORIGIN) }
-		runCatching { webStorage.deleteOrigin(DISCORD_WWW_ORIGIN) }
-
-		val cookieManager = CookieManager.getInstance()
-		cookieManager.removeSessionCookies(null)
-		cookieManager.removeAllCookies(null)
-		cookieManager.flush()
+		kototoroAppSettings.discordRefreshToken = null
+		kototoroAppSettings.discordCodeVerifier = null
 	}
 
 	private fun onDownloadsPagesDirectoryPicked(uri: Uri) {
@@ -1936,8 +1969,6 @@ class SettingsActivity :
 
 		private const val HOST_ABOUT = "about"
 		private const val HOST_ADD_REPO = "add-repo"
-		private const val DISCORD_ORIGIN = "https://discord.com"
-		private const val DISCORD_WWW_ORIGIN = "https://www.discord.com"
 		const val EXTRA_USE_HORIZONTAL_ROUTE_TRANSITION = "use_horizontal_route_transition"
 		const val ARG_PREF_KEY = "pref_key"
 		private const val EXTRA_UNIFIED_SOURCES_KIND = "extra_unified_sources_kind"

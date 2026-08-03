@@ -15,20 +15,20 @@ class DoublePageSpreadModelTest {
 		override val contentType = ContentType.MANGA
 	}
 
-	private fun page(position: Int, chapterId: Long) = ReaderPage(
+	private fun page(position: Int, chapterId: Long, pageIndex: Int = position) = ReaderPage(
 		id = position.toLong(),
 		url = "https://example.test/$position",
 		preview = null,
 		headers = null,
 		chapterId = chapterId,
-		index = position,
+		index = pageIndex,
 		source = source,
 	)
 
 	@Test
 	fun `inserts a spacer between odd chapter boundaries`() {
 		val items = buildDoublePageDisplayItems(
-			listOf(page(0, 1), page(1, 2), page(2, 2)),
+			listOf(page(0, 1), page(0, 2), page(1, 2)),
 		)
 
 		assertEquals(listOf(0, -1, 1, 2), items.map { it.originalPosition })
@@ -49,12 +49,41 @@ class DoublePageSpreadModelTest {
 	@Test
 	fun `inserts a cover spacer at every chapter boundary`() {
 		val items = buildDoublePageDisplayItems(
-			listOf(page(0, 1), page(1, 1), page(2, 2)),
+			listOf(page(0, 1), page(1, 1), page(0, 2)),
 			coverPage = true,
 		)
 
 		assertEquals(listOf(-1, 0, 1, -1, -1, 2), items.map { it.originalPosition })
 		assertEquals(null, items[4].page)
+	}
+
+	@Test
+	fun `preserves odd chapter tail pairing in a truncated adjacent window`() {
+		val items = buildDoublePageDisplayItems(
+			listOf(page(19, 1), page(20, 1), page(0, 2), page(1, 2)),
+		)
+
+		assertEquals(listOf(-1, 0, 1, -1, 2, 3), items.map { it.originalPosition })
+		val model = DoublePageSpreadModel.create(items.size)
+		assertEquals(
+			listOf(20),
+			model.spreads[1].positions.mapNotNull { items[it].page?.index },
+		)
+	}
+
+	@Test
+	fun `preserves cover page phase in a truncated adjacent window`() {
+		val items = buildDoublePageDisplayItems(
+			listOf(page(19, 1), page(20, 1), page(0, 2), page(1, 2)),
+			coverPage = true,
+		)
+
+		assertEquals(listOf(0, 1, -1, 2, 3), items.map { it.originalPosition })
+		val model = DoublePageSpreadModel.create(items.size)
+		assertEquals(
+			listOf(19, 20),
+			model.spreads.first().positions.mapNotNull { items[it].page?.index },
+		)
 	}
 
 	@Test
@@ -115,19 +144,31 @@ class DoublePageSpreadModelTest {
 	}
 
 	@Test
-	fun `double page navigation advances one complete spread`() {
-		assertEquals(
-			4,
-			resolvePageNavigationTarget(currentPosition = 2, delta = 1, pageStep = 2),
-		)
+	fun `double page navigation includes an odd chapter tail spread`() {
+		val pages = (0 until 27).map { page(it, chapterId = 1) } +
+			(0 until 2).map { index -> page(27 + index, chapterId = 2, pageIndex = index) }
+		val items = buildDoublePageDisplayItems(pages)
+
+		assertEquals(26, resolveDoublePageNavigationTarget(items, currentPosition = 25, delta = 1))
+		assertEquals(26, resolveDoublePageNavigationTarget(items, currentPosition = 27, delta = -1))
 	}
 
 	@Test
-	fun `reversed layout navigation still advances through content indexes`() {
-		assertEquals(
-			6,
-			resolvePageNavigationTarget(currentPosition = 4, delta = 1, pageStep = 2),
-		)
+	fun `double page navigation advances from an odd chapter tail to the next chapter`() {
+		val pages = (0 until 27).map { page(it, chapterId = 1) } +
+			(0 until 2).map { index -> page(27 + index, chapterId = 2, pageIndex = index) }
+		val items = buildDoublePageDisplayItems(pages)
+
+		assertEquals(27, resolveDoublePageNavigationTarget(items, currentPosition = 26, delta = 1))
+	}
+
+	@Test
+	fun `double page navigation follows cover page spread alignment`() {
+		val pages = (0 until 4).map { page(it, chapterId = 1) }
+		val items = buildDoublePageDisplayItems(pages, coverPage = true)
+
+		assertEquals(1, resolveDoublePageNavigationTarget(items, currentPosition = 0, delta = 1))
+		assertEquals(0, resolveDoublePageNavigationTarget(items, currentPosition = 1, delta = -1))
 	}
 
 	@Test
@@ -152,6 +193,27 @@ class DoublePageSpreadModelTest {
 		assertEquals(
 			1,
 			model.resolveAnchorSpreadIndex(updatedKeys, anchorPageKey = 12L, fallbackPosition = 2),
+		)
+	}
+
+	@Test
+	fun `prepending adjacent chapter pages preserves current spread in both layouts`() {
+		val currentChapterKeys = (100L..120L).toList()
+		val anchorKey = 101L
+		val updatedKeys = listOf(98L, 99L) + currentChapterKeys
+		val model = DoublePageSpreadModel.create(updatedKeys.size)
+
+		val spreadIndex = model.resolveAnchorSpreadIndex(
+			pageKeys = updatedKeys,
+			anchorPageKey = anchorKey,
+			fallbackPosition = 0,
+		)
+
+		assertEquals(1, spreadIndex)
+		assertTrue(anchorKey in model.spreads[spreadIndex].positions.map(updatedKeys::get))
+		assertEquals(
+			listOf(101L, 100L),
+			model.spreads[spreadIndex].orderedPositions(reverseLayout = true).map(updatedKeys::get),
 		)
 	}
 

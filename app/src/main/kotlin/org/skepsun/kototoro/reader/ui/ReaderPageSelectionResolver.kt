@@ -49,6 +49,24 @@ internal fun resolveVisiblePageSelection(
 	return selected
 }
 
+internal fun resolveWebtoonVisiblePageSelection(
+	pages: List<ReaderPage>,
+	lowerPos: Int,
+	upperPos: Int,
+	currentChapterId: Long?,
+	activePageKey: Long,
+	boundsPageOffset: Int,
+): Int {
+	val activePos = pages.indexOfFirst { it.readerKey == activePageKey }
+	if (activePos < 0 || lowerPos !in pages.indices || upperPos !in pages.indices || lowerPos > upperPos) {
+		return resolveVisiblePageSelection(pages, lowerPos, upperPos, currentChapterId, boundsPageOffset)
+	}
+	if (currentChapterId == null || pages[activePos].chapterId == currentChapterId) return activePos
+
+	return (upperPos downTo lowerPos).firstOrNull { pages[it].chapterId == currentChapterId }
+		?: activePos
+}
+
 internal fun resolveReaderInitialPagePosition(pages: List<ReaderPage>, state: ReaderState?): Int {
 	if (state == null) return 0
 	return pages.indexOfFirst { page ->
@@ -65,6 +83,18 @@ internal fun resolveReaderCurrentPagePosition(
 		pages.indexOfFirst { it.readerKey == pageKey }.takeIf { it >= 0 }?.let { return it }
 	}
 	return resolveReaderInitialPagePosition(pages, fallbackState)
+}
+
+internal fun resolvePagedReaderAnchorPosition(
+	pageKeys: List<Long>,
+	anchorPageKey: Long?,
+	fallbackPosition: Int,
+): Int? {
+	if (pageKeys.isEmpty()) return null
+	anchorPageKey?.let { key ->
+		pageKeys.indexOf(key).takeIf { it >= 0 }?.let { return it }
+	}
+	return fallbackPosition.coerceIn(pageKeys.indices)
 }
 
 private const val LOG_TAG = "ReaderDebug"

@@ -98,6 +98,8 @@ import org.skepsun.kototoro.R
 import org.skepsun.kototoro.core.BaseApp
 import org.skepsun.kototoro.core.ui.compose.HeroAutoAdvanceEffect
 import org.skepsun.kototoro.core.ui.compose.HeroPagerIndicator
+import org.skepsun.kototoro.core.ui.compose.CompactContentCoverShape
+import org.skepsun.kototoro.core.ui.compose.ContentCoverShape
 import org.skepsun.kototoro.core.ui.compose.rememberDrawablePainter
 import org.skepsun.kototoro.core.ui.compose.rememberResolvedSourceTitle
 import org.skepsun.kototoro.core.prefs.AppSettings
@@ -534,7 +536,7 @@ private fun HomeHeroSection(
         val cardWidth = (portraitViewportWidth - edgePadding * 2)
             .coerceAtLeast(0.dp)
             .coerceAtMost(HOME_HERO_PAGER_MAX_WIDTH)
-        val pageSpacing = 12.dp
+        val pageSpacing = 6.dp
         val contentPadding = if (isLandscape) {
             PaddingValues(start = edgePadding, end = 0.dp)
         } else {
@@ -728,7 +730,7 @@ private fun HomeHeroCard(
                     .onGloballyPositioned { coordinates ->
                         coverBounds = coordinates.unclippedBoundsInWindow()
                     }
-                    .clip(MaterialTheme.shapes.medium)
+                    .clip(ContentCoverShape)
                     .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.28f)),
             ) {
                 if (coverRequest != null) {
@@ -1187,7 +1189,7 @@ private fun HomeListRailRowItem(
                         }
                     } else Modifier
                 )
-                .clip(if (listMode == ListMode.DETAILED_LIST) MaterialTheme.shapes.medium else MaterialTheme.shapes.small)
+                .clip(if (listMode == ListMode.DETAILED_LIST) ContentCoverShape else CompactContentCoverShape)
                 .background(MaterialTheme.colorScheme.surfaceVariant),
         ) {
             if (imageRequest != null) {

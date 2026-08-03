@@ -218,6 +218,10 @@ class AppSettings @Inject constructor(@ApplicationContext private val context: C
 		get() = prefs.getBoolean(KEY_NAV_FLOATING_ADAPTIVE_WIDTH, true)
 		set(value) = prefs.edit { putBoolean(KEY_NAV_FLOATING_ADAPTIVE_WIDTH, value) }
 
+	var isMainFabEnabled: Boolean
+		get() = prefs.getBoolean(KEY_MAIN_FAB, true)
+		set(value) = prefs.edit { putBoolean(KEY_MAIN_FAB, value) }
+
 	var isNavExpressivePillEnabled: Boolean
 		get() = prefs.getBoolean(
 			KEY_NAV_EXPRESSIVE_PILL,
@@ -427,6 +431,18 @@ class AppSettings @Inject constructor(@ApplicationContext private val context: C
 		get() = prefs.getBoolean(KEY_DISABLE_NSFW, true)
 		set(value) = prefs.edit { putBoolean(KEY_DISABLE_NSFW, value) }
 
+	var globalTagBlacklist: Set<String>
+		get() = prefs.getStringSet(KEY_GLOBAL_TAG_BLACKLIST, emptySet())
+			.orEmpty()
+			.mapToSet(String::trim)
+			.filterTo(LinkedHashSet(), String::isNotEmpty)
+		set(value) = prefs.edit {
+			putStringSet(
+				KEY_GLOBAL_TAG_BLACKLIST,
+				value.map(String::trim).filter(String::isNotEmpty).toSet(),
+			)
+		}
+
 	var isHistoryExcludeNsfw: Boolean
 		get() = prefs.getBoolean(KEY_HISTORY_EXCLUDE_NSFW, false)
 		set(value) = prefs.edit { putBoolean(KEY_HISTORY_EXCLUDE_NSFW, value) }
@@ -574,8 +590,8 @@ class AppSettings @Inject constructor(@ApplicationContext private val context: C
 			?.mapNotNullTo(EnumSet.noneOf(ReaderControl::class.java)) { value ->
 				ReaderControl.entries.find { it.name == value }
 			}
-			?.apply { retainAll(ReaderControl.BOTTOM_BAR) }
-			?: ReaderControl.BOTTOM_BAR_DEFAULT
+			?.let(ReaderControl::limitFloatingControls)
+			?: ReaderControl.FLOATING_DEFAULT
 
 	var isOfflineCheckDisabled: Boolean
 		get() = prefs.getBoolean(KEY_OFFLINE_DISABLED, false)
@@ -1200,7 +1216,7 @@ class AppSettings @Inject constructor(@ApplicationContext private val context: C
 		get() = prefs.getString(KEY_READER_TRANSLATION_API_PROVIDER_PRESET, "CUSTOM")
 			?.trim()
 			?.uppercase()
-			?.takeIf { it in READER_TRANSLATION_API_PROVIDER_PRESETS }
+			?.takeIf { it.isNotBlank() }
 			?: "CUSTOM"
 
 	val readerTranslationApiCustomHeaders: String
@@ -1528,6 +1544,10 @@ class AppSettings @Inject constructor(@ApplicationContext private val context: C
 		get() = prefs.getBoolean(KEY_READER_SUPER_RESOLUTION_ENABLED, false)
 		set(value) = prefs.edit().putBoolean(KEY_READER_SUPER_RESOLUTION_ENABLED, value).apply()
 
+	var readerImageScalingQuality: ReaderImageScalingQuality
+		get() = prefs.getEnumValue(KEY_READER_IMAGE_SCALING_QUALITY, ReaderImageScalingQuality.DEFAULT)
+		set(value) = prefs.edit { putString(KEY_READER_IMAGE_SCALING_QUALITY, value.name) }
+
 	val readerSuperResolutionEngine: String
 		get() = prefs.getString(KEY_READER_SUPER_RESOLUTION_ENGINE, "ANIME4K") ?: "ANIME4K"
 
@@ -1695,6 +1715,20 @@ class AppSettings @Inject constructor(@ApplicationContext private val context: C
 	var discordToken: String?
 		get() = prefs.getString(KEY_DISCORD_TOKEN, null)?.trim()?.nullIfEmpty()
 		set(value) = prefs.edit { putString(KEY_DISCORD_TOKEN, value?.nullIfEmpty()) }
+
+	var discordRefreshToken: String?
+		get() = prefs.getString(KEY_DISCORD_REFRESH_TOKEN, null)?.trim()?.nullIfEmpty()
+		set(value) = prefs.edit { putString(KEY_DISCORD_REFRESH_TOKEN, value?.nullIfEmpty()) }
+
+	var discordCodeVerifier: String?
+		get() = prefs.getString(KEY_DISCORD_CODE_VERIFIER, null)
+		set(value) = prefs.edit {
+			if (value == null) {
+				remove(KEY_DISCORD_CODE_VERIFIER)
+			} else {
+				putString(KEY_DISCORD_CODE_VERIFIER, value)
+			}
+		}
 
 	val isPeriodicalBackupEnabled: Boolean
 		get() = isBackupWebDavUploadEnabled
@@ -2101,18 +2135,6 @@ class AppSettings @Inject constructor(@ApplicationContext private val context: C
 	}
 
 	companion object {
-		private val READER_TRANSLATION_API_PROVIDER_PRESETS = setOf(
-			"CUSTOM",
-			"OPENAI",
-			"DEEPSEEK",
-			"ZHIPU",
-			"ALIBABA",
-			"MOONSHOT",
-			"ANTHROPIC",
-			"GEMINI",
-			"OPENROUTER",
-		)
-
 		private val CORNER_RADIUS_ALLOWED_VALUES = setOf(-1, 12, 16, 20, 24)
 
 
@@ -2440,6 +2462,7 @@ class AppSettings @Inject constructor(@ApplicationContext private val context: C
 		const val KEY_FAVOURITES_EXCLUDE_NSFW = "favourites_exclude_nsfw"
 		const val KEY_FEED_EXCLUDE_NSFW = "feed_exclude_nsfw"
 		const val KEY_DISABLE_NSFW = "no_nsfw"
+		const val KEY_GLOBAL_TAG_BLACKLIST = "global_tag_blacklist"
 		const val KEY_RELATED_MANGA = "related_manga"
 		const val KEY_NAV_MAIN = "nav_main"
 		const val KEY_NAV_LABELS = "nav_labels"
@@ -2449,6 +2472,7 @@ class AppSettings @Inject constructor(@ApplicationContext private val context: C
 		const val KEY_NAV_EXPRESSIVE_PILL = "nav_expressive_pill"
 		const val KEY_NAV_HEIGHT = "nav_height"
 		const val KEY_NAV_FLOATING_HEIGHT = "nav_floating_height"
+		const val KEY_MAIN_FAB = "main_fab"
 
 		const val KEY_LOADING_CIRCLE_STYLE = "loading_circle_style"
 		const val KEY_POPUP_RADIUS = "popup_radius"
@@ -2464,6 +2488,7 @@ class AppSettings @Inject constructor(@ApplicationContext private val context: C
 		const val KEY_CF_INVERTED = "cf_inverted"
 		const val KEY_CF_GRAYSCALE = "cf_grayscale"
 		const val KEY_CF_BOOK = "cf_book"
+		const val KEY_READER_IMAGE_SCALING_QUALITY = "reader_image_scaling_quality"
 		const val KEY_PAGES_TAB = "pages_tab"
 		const val KEY_DETAILS_TRANSLATE_BUTTON = "details_translate_button"
 		const val KEY_MODERN_DETAILS_DOCK = "modern_details_dock"
@@ -2550,6 +2575,8 @@ class AppSettings @Inject constructor(@ApplicationContext private val context: C
 		const val KEY_DISCORD_RPC = "discord_rpc"
 		const val KEY_DISCORD_RPC_SKIP_NSFW = "discord_rpc_skip_nsfw"
 		const val KEY_DISCORD_TOKEN = "discord_token"
+		const val KEY_DISCORD_REFRESH_TOKEN = "discord_refresh_token"
+		const val KEY_DISCORD_CODE_VERIFIER = "discord_code_verifier"
 		const val KEY_SELECTED_GROUP_TAB = "selected_group_tab"
 		const val KEY_SELECTED_SOURCE_FILTER = "selected_source_filter"
 		const val KEY_SELECTED_SOURCE_TAGS = "selected_source_tags"

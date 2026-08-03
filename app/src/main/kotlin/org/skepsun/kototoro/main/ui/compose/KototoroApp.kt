@@ -439,6 +439,7 @@ fun KototoroApp(
     onSettingsClick: () -> Unit = {},
     onSourceSettingsClick: () -> Unit = {},
     onManageSourcesClick: () -> Unit = onSourceSettingsClick,
+    onGlobalTagBlacklistClick: () -> Unit = {},
     onTrackingAccountsClick: () -> Unit = {},
     isAppUpdateAvailable: Boolean = false,
     onAppUpdateClick: () -> Unit = {},
@@ -528,6 +529,11 @@ fun KototoroApp(
         AppSettings.KEY_REDUCED_VISUAL_EFFECTS,
     ) {
         isReducedVisualEffectsEnabled
+    }
+    val globalTagBlacklist by appSettings.observeAsState(
+        AppSettings.KEY_GLOBAL_TAG_BLACKLIST,
+    ) {
+        this.globalTagBlacklist
     }
     val suppressSpaceContentMotion = spaceTransitionState.phase == SpaceTransitionPhase.COVERED ||
         spaceTransitionState.phase == SpaceTransitionPhase.REVEALING
@@ -919,7 +925,8 @@ fun KototoroApp(
         looksLikeVideoContent = effectiveResumeContent?.looksLikeLocalVideoContent() == true,
     )
     val effectiveResumeCoverModel = rememberMainResumeCoverRequest(effectiveResumeContent)
-    val effectiveResumeEnabled = if (spaceUiState.switcherEnabled) {
+    val isMainFabEnabled by appSettings.observeAsState(AppSettings.KEY_MAIN_FAB) { isMainFabEnabled }
+    val effectiveResumeEnabled = isMainFabEnabled && if (spaceUiState.switcherEnabled) {
         activeSpaceResumeItem?.canResume == true
     } else {
         isResumeEnabled
@@ -1745,6 +1752,7 @@ fun KototoroApp(
                         initialContentKinds = initialSearchContentKinds,
                         languagePresets = languagePresetEntries,
                         activeLanguagePresetId = activeSourcePresetId,
+                        blacklistedTagCount = globalTagBlacklist.size,
                         onQueryChanged = onQueryChanged,
                         onSearch = {
                             isSearchOverlayQueryCommitted = true
@@ -1767,6 +1775,9 @@ fun KototoroApp(
                         onDismissRequest = { isSearchOverlayVisible = false },
                         onLanguagePresetSelected = onLanguagePresetSelected,
                         onManageLanguagePresets = onManageLanguagePresets,
+                        onOpenGlobalTagBlacklist = {
+                            onGlobalTagBlacklistClick()
+                        },
                         onExitFinished = {
                             if (!isSearchOverlayVisible) {
                                 if (!isSearchOverlayQueryCommitted) {
@@ -2159,6 +2170,7 @@ private fun ContinueReadingFab(
 ) {
     val backdrop = LocalLiquidGlassBackdrop.current
     val useBackdrop = LocalInterfaceStyle.current == InterfaceStyle.IOS && backdrop != null
+    val hasCover = coverModel != null
     if (useBackdrop) {
         Box(
             modifier = modifier
@@ -2192,7 +2204,7 @@ private fun ContinueReadingFab(
             onClick = onClick,
             modifier = modifier.size(56.dp),
             shape = CircleShape,
-            color = MaterialTheme.colorScheme.primaryContainer,
+            color = if (hasCover) Color.Transparent else MaterialTheme.colorScheme.primaryContainer,
             contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
             shadowElevation = 6.dp,
         ) {
@@ -2305,7 +2317,10 @@ private fun BoxScope.MainBottomChrome(
                 continueReadingCoverModel = resumeCoverModel,
             )
         }
-        if (LocalBackgroundStyle.current == BackgroundStyle.ELEVATED_CONTAINERS) {
+        if (
+            LocalBackgroundStyle.current == BackgroundStyle.ELEVATED_CONTAINERS &&
+            !isLandscapeNavigation
+        ) {
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surfaceContainer,

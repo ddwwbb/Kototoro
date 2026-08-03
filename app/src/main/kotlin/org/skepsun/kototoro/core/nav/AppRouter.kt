@@ -42,6 +42,7 @@ import org.skepsun.kototoro.BuildConfig
 import org.skepsun.kototoro.R
 import org.skepsun.kototoro.alternatives.ui.compose.AlternativesSheetRoute
 import org.skepsun.kototoro.backups.ui.restore.RestoreDialogRoute
+import org.skepsun.kototoro.backups.domain.BackupRestoreFormat
 import org.skepsun.kototoro.browser.BrowserActivity
 import org.skepsun.kototoro.browser.cloudflare.CloudFlareActivity
 import org.skepsun.kototoro.core.exceptions.CloudFlareProtectedException
@@ -77,6 +78,7 @@ import org.skepsun.kototoro.core.util.ext.findActivity
 import org.skepsun.kototoro.core.util.ext.getDisplayMessage
 import org.skepsun.kototoro.core.util.ext.getThemeDrawable
 import org.skepsun.kototoro.core.util.ext.printStackTraceDebug
+import org.skepsun.kototoro.core.util.ext.toSerializableThrowable
 import org.skepsun.kototoro.core.util.ext.getParcelableExtraCompat
 import org.skepsun.kototoro.core.util.ext.toFileOrNull
 import org.skepsun.kototoro.core.jsonsource.JsonContentSource
@@ -129,6 +131,7 @@ import org.skepsun.kototoro.search.domain.SearchKind
 import org.skepsun.kototoro.search.domain.SearchContentKind
 import org.skepsun.kototoro.search.ui.ContentListActivity
 import org.skepsun.kototoro.search.ui.multi.SearchActivity
+import org.skepsun.kototoro.settings.sources.blacklist.GlobalTagBlacklistActivity
 import org.skepsun.kototoro.settings.SettingsActivity
 import org.skepsun.kototoro.settings.about.AppUpdateActivity
 import org.skepsun.kototoro.settings.override.OverrideConfigActivity
@@ -875,6 +878,10 @@ class AppRouter private constructor(
         )
     }
 
+    fun openGlobalTagBlacklist() {
+        startActivity(GlobalTagBlacklistActivity.newIntent(contextOrNull() ?: return))
+    }
+
     fun openDiscordSettings() {
         val hostActivity = activity
         startActivity(
@@ -1175,16 +1182,20 @@ class AppRouter private constructor(
     fun showErrorDialog(error: Throwable, url: String? = null) {
         startActivitySafe(
             Intent(contextOrNull(), ErrorDetailsActivity::class.java)
-                .putExtra(KEY_ERROR, error as java.io.Serializable)
+                .putExtra(KEY_ERROR, error.toSerializableThrowable() as java.io.Serializable)
                 .putExtra(KEY_URL, url),
         )
     }
 
-    fun showBackupRestoreDialog(fileUri: Uri) {
+	fun showBackupRestoreDialog(
+		fileUri: Uri,
+		restoreFormat: BackupRestoreFormat = BackupRestoreFormat.KOTOTORO_CURRENT,
+	) {
         val composeActivity = (activity ?: fragment?.activity) as? BaseComposeActivity ?: return
         composeActivity.showComposeModal {
-            RestoreDialogRoute(
-                uri = fileUri,
+			RestoreDialogRoute(
+				uri = fileUri,
+				restoreFormat = restoreFormat,
                 onRestoreStarted = {
                     closeWelcomeSheet()
                     composeActivity.dismissComposeModal()

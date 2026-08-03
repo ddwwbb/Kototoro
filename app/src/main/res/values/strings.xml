@@ -779,6 +779,14 @@
     <string name="video_caches">Video caches</string>
     <string name="cache">Cache</string>
     <string name="available">Available</string>
+    <string name="blacklisted_tags">Blacklisted tags</string>
+    <string name="blacklisted_tags_summary">Exclude content containing these tags from lists and search results</string>
+	<string name="add_tag_pattern">Add “%1$s”</string>
+	<string name="global_tag_blacklist_active">Enabled · %1$d tags selected</string>
+	<string name="global_tag_blacklist_inactive">Not enabled · No tags selected</string>
+	<string name="show_aliases">Show aliases</string>
+	<string name="aliases_for_tag">Aliases · %1$s</string>
+	<string name="no_aliases">No aliases</string>
     <string name="memory_usage_pattern" translatable="false">%1$s - %2$s</string>
     <string name="removed_from_favourites">Removed from favorites</string>
     <string name="remove_from_favourites">Remove from favorites</string>
@@ -806,6 +814,15 @@
     <string name="reader_control_ltr_summary">Do not adjust the page switching direction to the reader mode, e. g. pressing the right key always switches to the next page. This option affects only hardware input devices</string>
     <string name="reader_control_ltr">Ergonomic reader control</string>
     <string name="color_correction">Color correction</string>
+    <string name="image_post_processing">Image post-processing</string>
+    <string name="image_post_processing_original">Original</string>
+    <string name="image_post_processing_result">Result</string>
+    <string name="reader_image_scaling_quality">Image scaling quality</string>
+    <string name="reader_image_scaling_nearest">None (nearest-neighbor)</string>
+    <string name="reader_image_scaling_bilinear">Low (bilinear)</string>
+    <string name="reader_image_scaling_default">Medium (default)</string>
+    <string name="reader_image_scaling_bicubic">High (bicubic)</string>
+    <string name="reader_image_scaling_lanczos">Lanczos pre-scale (best, slower)</string>
     <string name="brightness">Brightness</string>
     <string name="contrast">Contrast</string>
     <string name="reset">Reset</string>
@@ -917,8 +934,13 @@
     <string name="find_similar">Find similar</string>
     <string name="sync_settings">Synchronization settings</string>
     <string name="sync_settings_summary">Merge favorites, history, subscriptions, and update records across devices.</string>
+    <string name="external_backup_section_title">Export/import backups for other apps</string>
     <string name="import_backup_from_other_apps">Import backup from other apps</string>
     <string name="import_backup_from_other_apps_summary">Import favorites and history from Mihon-family, Aniyomi-family, or Venera backup files.</string>
+    <string name="import_backup_from_other_apps_combined_summary">%1$s\n%2$s: %3$s</string>
+    <string name="export_kotatsu_backup">Export Kotatsu backup</string>
+    <string name="export_kotatsu_backup_summary">Create a separate legacy backup for Kotatsu-family apps without Kototoro-specific sections.</string>
+    <string name="export_kotatsu_backup_saved">Kotatsu backup saved</string>
     <string name="export_mihon_backup">Export Mihon backup</string>
     <string name="export_mihon_backup_summary">Export favorites, categories, and reading progress for Mihon-source entries only.</string>
     <string name="export_mihon_backup_saved">Mihon backup saved (%1$d entries)</string>
@@ -985,6 +1007,10 @@
     <string name="network">Network</string>
     <string name="data_and_privacy">Data and privacy</string>
     <string name="restore_summary">Restore previously created backup</string>
+    <string name="restore_kototoro_backup">Restore current Kototoro backup</string>
+    <string name="restore_kototoro_backup_summary">Restore a Kototoro backup using the current semantic schema v3. Kotatsu and legacy backups are rejected here.</string>
+    <string name="import_kotatsu_or_legacy_backup">Import Kotatsu or legacy Kototoro backup</string>
+    <string name="import_kotatsu_or_legacy_backup_summary">Import a Kotatsu-family backup or a Kototoro backup using semantic schema v1/v2. Source and app settings are always ignored.</string>
     <string name="webtoon_zoom_summary">Allow zoom in gesture in webtoon mode</string>
     <string name="pull_to_prev_chapter">Release to open previous chapter</string>
     <string name="pull_to_next_chapter">Release to open next chapter</string>
@@ -2171,6 +2197,8 @@
     <string name="restoring_backup">Restoring backup</string>
     <string name="restore_auth_restart_hint">Login credentials restored. Please restart the app to apply.</string>
     <string name="reader_controls_in_bottom_bar">Reader controls in bottom bar</string>
+    <string name="reader_floating_controls">Reader floating buttons</string>
+    <string name="reader_floating_controls_summary">Select up to %1$d floating buttons</string>
     <string name="reader_control_labels">Show reader control labels</string>
     <string name="reader_control_labels_summary">Show text labels below buttons in the manga and novel reader control bars</string>
     <string name="chapters_and_pages">Chapters and pages</string>
@@ -2258,13 +2286,13 @@
     <string name="discord" translatable="false">Discord</string>
     <string name="discord_rpc">Discord Rich Presence</string>
     <string name="discord_token">Discord Token</string>
-    <string name="discord_token_summary">Enter your Discord Token to enable Rich Presence</string>
+    <string name="discord_token_summary">Sign in with Discord to enable Rich Presence</string>
     <string name="discord_token_description">Enter your Discord Token or click %s to get it using browser</string>
     <string name="discord_token_hint">Paste your Discord Token here</string>
     <string name="discord_rpc_summary">Show your reading status on Discord</string>
     <string name="obtain">Obtain</string>
     <string name="discord_rpc_description">Reading manga on Kototoro - a manga reader app</string>
-    <string name="discord_logout_summary">Clear the saved Discord token and sign out from the embedded Discord session</string>
+    <string name="discord_logout_summary">Clear the saved Discord authorization</string>
     <string name="reading_s">Reading %s</string>
     <string name="read_on_s">Read on %s</string>
     <string name="rpc_skip_nsfw_summary">Do not use RPC for adult content</string>
@@ -2773,6 +2801,7 @@
     <string name="welcome_plugins_repo_kototoro">Kototoro Parsers</string>
     <string name="welcome_plugins_repo_yakateam">Yakateam Parsers</string>
     <string name="welcome_plugins_repo_redo">Redo Parsers</string>
+    <string name="welcome_plugins_repo_uma">UMA (Tsuki Parsers)</string>
     <string name="welcome_plugins_disclaimer">These extension repositories are maintained by independent online communities. The Kototoro developers have no affiliation, control, or association with these third-party repositories. I acknowledge that I am configuring these sources at my own risk.</string>
     <string name="welcome_plugins_start_btn">1-Click Initialize</string>
 

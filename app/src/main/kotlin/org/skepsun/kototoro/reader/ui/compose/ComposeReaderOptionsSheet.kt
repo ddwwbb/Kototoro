@@ -55,8 +55,10 @@ import org.skepsun.kototoro.R
 import org.skepsun.kototoro.core.prefs.ReaderAnimation
 import org.skepsun.kototoro.core.prefs.ReaderMode
 import org.skepsun.kototoro.core.prefs.ReaderBackground
+import org.skepsun.kototoro.core.prefs.ReaderImageScalingQuality
 import org.skepsun.kototoro.reader.ui.config.ImageServerOptions
-import org.skepsun.kototoro.reader.ui.colorfilter.ReaderColorCorrectionEditor
+import org.skepsun.kototoro.reader.ui.colorfilter.ReaderColorCorrectionControls
+import org.skepsun.kototoro.reader.ui.colorfilter.ReaderImageComparisonPreview
 import org.skepsun.kototoro.reader.domain.ReaderColorFilter
 import org.skepsun.kototoro.reader.ui.compose.design.ReaderOptionDivider
 import org.skepsun.kototoro.reader.ui.compose.design.ReaderOptionGroup
@@ -79,6 +81,7 @@ internal data class ComposeReaderOptionsState(
 	val appearancePreviewProcessedUri: String? = null,
 	val appearancePreviewLoading: Boolean = false,
 	val colorFilter: ReaderColorFilter? = null,
+	val imageScalingQuality: ReaderImageScalingQuality = ReaderImageScalingQuality.DEFAULT,
 	val background: ReaderBackground = ReaderBackground.DEFAULT,
 	val imageServer: ImageServerOptions? = null,
 )
@@ -104,9 +107,9 @@ internal data class ComposeReaderOptionsCallbacks(
 	val onRotate: () -> Unit = {},
 	val onAutoScroll: () -> Unit = {},
 	val onTranslation: () -> Unit = {},
-	val onTranslationTools: () -> Unit = {},
 	val onOpenSettings: () -> Unit = {},
 	val onColorFilterChanged: (ReaderColorFilter?) -> Unit = {},
+	val onImageScalingQualityChanged: (ReaderImageScalingQuality) -> Unit = {},
 	val onSaveColorFilterForManga: (ReaderColorFilter?) -> Unit = {},
 	val onSaveColorFilterGlobally: (ReaderColorFilter?) -> Unit = {},
 	val onOpenBrowser: () -> Unit = {},
@@ -114,7 +117,6 @@ internal data class ComposeReaderOptionsCallbacks(
 	val onRetranslatePage: () -> Unit = {},
 	val onRetryFailedTranslations: () -> Unit = {},
 	val onRetranslateChapter: () -> Unit = {},
-	val onTranslationLog: () -> Unit = {},
 )
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -123,13 +125,15 @@ internal fun ComposeReaderOptionsSheet(
 	state: ComposeReaderOptionsState,
 	callbacks: ComposeReaderOptionsCallbacks,
 	embedded: Boolean = false,
+	translationTaskPanelContent: @Composable () -> Unit = {},
+	headerModifier: Modifier = Modifier,
 	modifier: Modifier = Modifier,
 ) {
 	if (!state.visible) return
 	val pages = listOf(
 		ReaderOptionsPage(R.drawable.ic_book_page, R.string.reader_page_turning_mode),
 		ReaderOptionsPage(R.drawable.ic_translate, R.string.reader_translation_tools),
-		ReaderOptionsPage(R.drawable.ic_appearance, R.string.color_correction),
+		ReaderOptionsPage(R.drawable.ic_appearance, R.string.image_post_processing),
 		ReaderOptionsPage(R.drawable.ic_more_vert, R.string.miscellaneous),
 	)
 	val pagerState = rememberPagerState(pageCount = { pages.size })
@@ -146,6 +150,7 @@ internal fun ComposeReaderOptionsSheet(
 			Row(
 				modifier = Modifier
 					.fillMaxWidth()
+					.then(headerModifier)
 					.padding(horizontal = 8.dp, vertical = 4.dp),
 				verticalAlignment = Alignment.CenterVertically,
 			) {
@@ -165,7 +170,7 @@ internal fun ComposeReaderOptionsSheet(
 			) { page ->
 				when (page) {
 					0 -> ReaderModeOptionsPage(state, callbacks)
-					1 -> ReaderTranslationOptionsPage(callbacks)
+					1 -> ReaderTranslationOptionsPage(callbacks, translationTaskPanelContent)
 					2 -> ReaderAppearanceOptionsPage(state, callbacks)
 					else -> ReaderMiscOptionsPage(state, callbacks)
 				}
@@ -308,22 +313,26 @@ private fun ReaderModeOptionsPage(
 @Composable
 private fun ReaderTranslationOptionsPage(
 	callbacks: ComposeReaderOptionsCallbacks,
+	translationTaskPanelContent: @Composable () -> Unit,
 ) {
 	fun dismissThen(action: () -> Unit): () -> Unit = {
 		callbacks.onDismiss()
 		action()
 	}
-	OptionsPageList {
-		item {
-			OptionsActionGrid {
-				OptionAction(R.drawable.ic_translate, R.string.reader_translation_action, dismissThen(callbacks.onTranslation))
-				OptionAction(R.drawable.ic_translate, R.string.reader_translation_tools, dismissThen(callbacks.onTranslationTools))
-				OptionAction(R.drawable.ic_settings, R.string.reader_translation_action_settings, dismissThen(callbacks.onTranslationSettings))
-				OptionAction(R.drawable.ic_retry, R.string.reader_translation_retranslate_current_page, dismissThen(callbacks.onRetranslatePage))
-				OptionAction(R.drawable.ic_retry, R.string.reader_translation_retry_failed_pages, dismissThen(callbacks.onRetryFailedTranslations))
-				OptionAction(R.drawable.ic_retry, R.string.reader_translation_retranslate_current_chapter, dismissThen(callbacks.onRetranslateChapter))
-				OptionAction(R.drawable.ic_info_outline, R.string.reader_translation_task_panel_title, dismissThen(callbacks.onTranslationLog))
-			}
+	Column(
+		modifier = Modifier
+			.fillMaxSize()
+			.padding(horizontal = 12.dp, vertical = 4.dp),
+	) {
+		OptionsActionGrid {
+			OptionAction(R.drawable.ic_translate, R.string.reader_translation_action, dismissThen(callbacks.onTranslation))
+			OptionAction(R.drawable.ic_retry, R.string.reader_translation_retranslate_current_page, callbacks.onRetranslatePage)
+			OptionAction(R.drawable.ic_retry, R.string.reader_translation_retranslate_current_chapter, callbacks.onRetranslateChapter)
+			OptionAction(R.drawable.ic_settings, R.string.reader_translation_action_settings, dismissThen(callbacks.onTranslationSettings))
+		}
+		ReaderOptionDivider()
+		Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+			translationTaskPanelContent()
 		}
 	}
 }
@@ -335,26 +344,60 @@ private fun ReaderAppearanceOptionsPage(
 ) {
 	OptionsPageList {
 		item {
-			Column(modifier = Modifier.padding(horizontal = 12.dp)) {
-				ReaderColorCorrectionEditor(
+			ReaderOptionGroup {
+				ReaderImageComparisonPreview(
 					originalPreviewModel = state.appearancePreviewOriginalUri,
 					processedPreviewModel = state.appearancePreviewProcessedUri,
 					colorFilter = state.colorFilter,
+					imageScalingQuality = state.imageScalingQuality,
 					isLoading = state.appearancePreviewLoading,
-					onColorFilterChange = callbacks.onColorFilterChanged,
-					onReset = { callbacks.onColorFilterChanged(null) },
+					modifier = Modifier.padding(8.dp),
 				)
-				ReaderOptionGroup(modifier = Modifier.padding(top = 8.dp)) {
-					ReaderOptionSwitchRow(
+			}
+		}
+		item {
+			ReaderOptionGroup {
+				val scalingQualityLabels = ReaderImageScalingQuality.entries.map { it.label() }
+				SelectRow(
+					title = stringResource(R.string.reader_image_scaling_quality),
+					selected = state.imageScalingQuality.label(),
+					options = scalingQualityLabels,
+					onSelected = {
+						callbacks.onImageScalingQualityChanged(ReaderImageScalingQuality.entries[it])
+					},
+				)
+				ReaderOptionDivider()
+				ReaderOptionSwitchRow(
 					label = stringResource(R.string.reader_super_resolution),
 					checked = state.superResolution,
 					onCheckedChange = callbacks.onSuperResolutionChanged,
-					)
-				}
+				)
+			}
+		}
+		item {
+			ReaderColorCorrectionControls(
+				colorFilter = state.colorFilter,
+				isLoading = state.appearancePreviewLoading,
+				onColorFilterChange = callbacks.onColorFilterChanged,
+				onReset = { callbacks.onColorFilterChanged(null) },
+			)
+		}
+		item {
+			ReaderOptionGroup {
 				Row(
-					horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-					modifier = Modifier.fillMaxWidth(),
+					verticalAlignment = Alignment.CenterVertically,
+					modifier = Modifier
+						.fillMaxWidth()
+						.heightIn(min = 52.dp)
+						.padding(horizontal = 4.dp),
 				) {
+					Text(
+						text = stringResource(R.string.save),
+						style = MaterialTheme.typography.bodyMedium,
+						fontWeight = FontWeight.Medium,
+						color = MaterialTheme.colorScheme.onSurfaceVariant,
+						modifier = Modifier.weight(1f).padding(start = 8.dp),
+					)
 					TextButton(onClick = { callbacks.onSaveColorFilterGlobally(state.colorFilter) }) {
 						Text(stringResource(R.string.globally))
 					}
@@ -501,6 +544,17 @@ private fun ReaderMode.label(): String = stringResource(
 		ReaderMode.REVERSED -> R.string.right_to_left
 		ReaderMode.VERTICAL -> R.string.vertical
 		ReaderMode.WEBTOON -> R.string.webtoon
+	},
+)
+
+@Composable
+private fun ReaderImageScalingQuality.label(): String = stringResource(
+	when (this) {
+		ReaderImageScalingQuality.NEAREST -> R.string.reader_image_scaling_nearest
+		ReaderImageScalingQuality.BILINEAR -> R.string.reader_image_scaling_bilinear
+		ReaderImageScalingQuality.DEFAULT -> R.string.reader_image_scaling_default
+		ReaderImageScalingQuality.BICUBIC -> R.string.reader_image_scaling_bicubic
+		ReaderImageScalingQuality.LANCZOS -> R.string.reader_image_scaling_lanczos
 	},
 )
 

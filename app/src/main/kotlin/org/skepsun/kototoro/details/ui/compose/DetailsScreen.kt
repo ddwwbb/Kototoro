@@ -139,6 +139,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
@@ -630,7 +632,15 @@ private fun DetailsScreenContent(
         viewModel.onError.observeEvent(lifecycleOwner, SnackbarErrorObserver(rootView, null))
         viewModel.onActionDone.observeEvent(lifecycleOwner, ReversibleActionObserver(rootView))
         viewModel.onDownloadStarted.observeEvent(lifecycleOwner, DownloadStartedObserver(rootView))
-        onDispose { }
+        val sourceBindingsObserver = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.refreshSourceBindings()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(sourceBindingsObserver)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(sourceBindingsObserver)
+        }
     }
     val compactCollapseProgressProvider = remember(
         scrollState,
@@ -1126,7 +1136,7 @@ private fun DetailsScreenContent(
             val commonTopBar: @Composable () -> Unit = {
                 val titleAlpha = ((toolbarTitleProgressProvider() - 0.82f) / 0.18f).coerceIn(0f, 1f)
                 val panoramaTopBarContainerColor = if (panoramaPrefs.isEnabled) {
-                    MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.68f)
+                    MaterialTheme.colorScheme.surfaceContainer
                 } else {
                     null
                 }
@@ -3660,7 +3670,7 @@ private fun PageGridSizeControlsRow(
         Surface(
             modifier = Modifier.padding(start = 4.dp, end = 6.dp),
             shape = RoundedCornerShape(18.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.96f),
+            color = MaterialTheme.colorScheme.surfaceContainerHighest,
             contentColor = MaterialTheme.colorScheme.onSurface,
             border = BorderStroke(
                 width = 1.dp,

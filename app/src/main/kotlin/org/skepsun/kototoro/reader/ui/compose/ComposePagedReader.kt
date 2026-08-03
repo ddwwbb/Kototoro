@@ -38,13 +38,13 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerScope
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -58,6 +58,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -112,20 +113,18 @@ import kotlin.math.roundToInt
 import org.skepsun.kototoro.core.prefs.ReaderMode
 import org.skepsun.kototoro.core.prefs.ReaderBackground
 import org.skepsun.kototoro.core.prefs.ReaderAnimation
+import org.skepsun.kototoro.core.prefs.ReaderImageScalingQuality
 import org.skepsun.kototoro.core.model.ZoomMode
 import org.skepsun.kototoro.core.util.ext.mangaSourceExtra
 import org.skepsun.kototoro.R
 import org.skepsun.kototoro.core.image.AvifAnimatedDrawable
+import org.skepsun.kototoro.core.ui.compose.KototoroLoadingIndicator
+import org.skepsun.kototoro.reader.ui.resolvePagedReaderAnchorPosition
 import org.skepsun.kototoro.reader.ui.pager.ReaderPage
 import org.skepsun.kototoro.reader.ui.pager.ReaderAutoBackground
 import org.skepsun.kototoro.reader.ui.pager.ReaderPageSplit
 
 private data class WebtoonImageSize(
-	val width: Int,
-	val height: Int,
-)
-
-private data class PageDisplaySize(
 	val width: Int,
 	val height: Int,
 )
@@ -200,7 +199,7 @@ fun ComposePagedReader(
 ) {
 	if (pages.isEmpty()) {
 		Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-			CircularProgressIndicator()
+			KototoroLoadingIndicator()
 		}
 		return
 	}
@@ -212,6 +211,7 @@ fun ComposePagedReader(
 		initialPage = initialPage.coerceIn(displayedPages.indices),
 		pageCount = { displayedPages.size },
 	)
+	var isRestoringPageAnchor by remember { mutableStateOf(false) }
 	var advancedAnchorPage by remember(pagerState) { mutableIntStateOf(pagerState.currentPage) }
 	LaunchedEffect(pagerState, pageAnimation) {
 		snapshotFlow {
@@ -255,12 +255,39 @@ fun ComposePagedReader(
 		}
 	}
 	LaunchedEffect(pages, pagerState.isScrollInProgress) {
-		if (!pagerState.isScrollInProgress) displayedPages = pages
+		if (!pagerState.isScrollInProgress && displayedPages !== pages) {
+			val anchorPageKey = displayedPages.getOrNull(pagerState.settledPage)?.readerKey
+			val anchorPosition = resolvePagedReaderAnchorPosition(
+				pageKeys = pages.map(ReaderPage::readerKey),
+				anchorPageKey = anchorPageKey,
+				fallbackPosition = pagerState.settledPage,
+			) ?: return@LaunchedEffect
+			isRestoringPageAnchor = true
+			try {
+				displayedPages = pages
+				withFrameNanos { }
+				if (pagerState.currentPage != anchorPosition) {
+					pagerState.scrollToPage(anchorPosition)
+				}
+			} finally {
+				isRestoringPageAnchor = false
+			}
+		}
 	}
-	LaunchedEffect(pagerState, displayedPages) {
-		snapshotFlow { pagerState.settledPage }
+	LaunchedEffect(pagerState, displayedPages, isRestoringPageAnchor) {
+		snapshotFlow {
+			Triple(
+				pagerState.isScrollInProgress,
+				pagerState.settledPage,
+				isRestoringPageAnchor,
+			)
+		}
 			.distinctUntilChanged()
-			.collect { position -> displayedPages.getOrNull(position)?.let(onPageChanged) }
+			.collect { (isScrolling, position, restoringAnchor) ->
+				if (shouldReportReaderSettledPage(isScrolling, restoringAnchor)) {
+					displayedPages.getOrNull(position)?.let(onPageChanged)
+				}
+			}
 	}
 
 	LaunchedEffect(requestedPage, requestedPageSmooth, isAnimationEnabled, displayedPages) {
@@ -467,6 +494,13 @@ fun ComposeWebtoonReader(
 	}
 	var hasAppliedInitialPosition by remember { mutableStateOf(false) }
 	var isAnchorRestorePending by remember { mutableStateOf(true) }
+	var appliedPageKeys by remember { mutableStateOf(pageKeys) }
+	val isPageWindowAnchorShifted = requiresWebtoonAnchorRestore(
+		previousPageKeys = appliedPageKeys,
+		pageKeys = pageKeys,
+		anchorPageKey = stableViewportAnchor.pageKey,
+	)
+	val isPageWindowAnchorShiftedState = rememberUpdatedState(isPageWindowAnchorShifted)
 	// Keep dimensions outside individual lazy items. When an item is recycled and later returns
 	// from Coil's cache, its height is known before the bitmap is drawn, preventing scroll jumps.
 	val imageSizes = remember { mutableStateMapOf<Long, WebtoonImageSize>() }
@@ -480,6 +514,7 @@ fun ComposeWebtoonReader(
 	var canvasOffsetX by remember { mutableFloatStateOf(0f) }
 	var canvasOffsetY by remember { mutableFloatStateOf(0f) }
 	val zoomAnimationScope = rememberCoroutineScope()
+	val webtoonNavigationScope = rememberCoroutineScope()
 	val context = LocalContext.current
 	val doubleTapSlop = remember(context) {
 		ViewConfiguration.get(context).scaledDoubleTapSlop.toFloat()
@@ -487,8 +522,32 @@ fun ComposeWebtoonReader(
 	val webtoonDecay = FloatExponentialDecaySpec()
 	var webtoonZoomAnimationJob by remember { mutableStateOf<Job?>(null) }
 	var webtoonFlingJob by remember { mutableStateOf<Job?>(null) }
+	var webtoonNavigationJob by remember { mutableStateOf<Job?>(null) }
 	var wasZoomEnabled by remember { mutableStateOf(isZoomEnabled) }
 	var hasAppliedInitialScroll by remember { mutableStateOf(initialScroll <= 0) }
+	val shiftedAnchorPosition = if (isPageWindowAnchorShifted) {
+		resolveWebtoonAnchorPosition(pageKeys, stableViewportAnchor.pageKey)
+	} else {
+		-1
+	}
+	SideEffect {
+		val canRequestShiftedAnchor =
+			shiftedAnchorPosition >= 0 &&
+			hasAppliedInitialPosition &&
+			hasAppliedInitialScroll &&
+			viewportWidthPx > 0 &&
+			viewportHeightPx > 0
+		if (canRequestShiftedAnchor) {
+			Log.d(
+				READER_WINDOW_LOG_TAG,
+				"request anchor key=${stableViewportAnchor.pageKey} " +
+					"from=${appliedPageKeys.indexOf(stableViewportAnchor.pageKey)} to=$shiftedAnchorPosition " +
+					"offset=${stableViewportAnchor.offsetPx} windowSize=${pageKeys.size}",
+			)
+			listState.requestScrollToItem(shiftedAnchorPosition, stableViewportAnchor.offsetPx)
+		}
+		if (!isPageWindowAnchorShifted || canRequestShiftedAnchor) appliedPageKeys = pageKeys
+	}
 	fun measurementFor(position: Int): WebtoonViewportMeasurement {
 		val size = pages.getOrNull(position)?.let { page -> imageSizes[page.readerKey] }
 		return measureWebtoonViewport(
@@ -508,14 +567,21 @@ fun ComposeWebtoonReader(
 			y.coerceIn(bounds.minY, bounds.maxY),
 		)
 	}
-	fun applyCanvasPan(pan: Offset) {
+	fun applyCanvasPan(pan: Offset, isTransformGesture: Boolean) {
 		if (!pan.x.isFinite() || !pan.y.isFinite()) return
 		val desiredX = canvasOffsetX + pan.x
 		val desiredY = canvasOffsetY + pan.y
 		val bounded = clampCanvasOffset(canvasScale, desiredX, desiredY)
 		canvasOffsetX = bounded.x
 		canvasOffsetY = bounded.y
-		dispatchWebtoonScroll(resolveWebtoonBoundaryHandoff(canvasScale, desiredY, bounded.y).toFloat())
+		dispatchWebtoonScroll(
+			resolveWebtoonGestureBoundaryHandoff(
+				scale = canvasScale,
+				desiredY = desiredY,
+				boundedY = bounded.y,
+				isTransformGesture = isTransformGesture,
+			).toFloat(),
+		)
 	}
 	fun contentCoordinateAtFocus(
 		scale: Float,
@@ -527,7 +593,11 @@ fun ComposeWebtoonReader(
 		val center = layoutSize / 2f
 		return center + (focus - offset - center) / safeScale
 	}
-	fun applyCanvasScaleAtFocus(nextScale: Float, focus: Offset) {
+	fun applyCanvasScaleAtFocus(
+		nextScale: Float,
+		focus: Offset,
+		isTransformGesture: Boolean = false,
+	) {
 		if (!nextScale.isFinite() || !focus.x.isFinite() || !focus.y.isFinite()) return
 		val previousScale = canvasScale
 		val previousLayoutHeight = resolveWebtoonLayoutViewportHeight(viewportHeightPx, previousScale)
@@ -566,7 +636,7 @@ fun ComposeWebtoonReader(
 			focus = focus.y,
 			layoutSize = nextLayoutHeight,
 		)
-		dispatchWebtoonScroll(focusedContentY - newFocusedContentY)
+		if (!isTransformGesture) dispatchWebtoonScroll(focusedContentY - newFocusedContentY)
 	}
 	suspend fun flingCanvas(velocity: Velocity) {
 		if (canvasScale <= 1f || maxOf(kotlin.math.abs(velocity.x), kotlin.math.abs(velocity.y)) < 50f) return
@@ -669,7 +739,17 @@ fun ComposeWebtoonReader(
 		val anchorPosition = resolveWebtoonAnchorPosition(pageKeys, stableViewportAnchor.pageKey)
 		if ((isAnchorRestorePending || viewportConfigurationChanged) && anchorPosition >= 0) {
 			isAnchorRestorePending = true
+			Log.d(
+				READER_WINDOW_LOG_TAG,
+				"restore anchor key=${stableViewportAnchor.pageKey} " +
+					"to=$anchorPosition offset=${stableViewportAnchor.offsetPx} windowSize=${pageKeys.size}",
+			)
 			listState.scrollToItem(anchorPosition, stableViewportAnchor.offsetPx)
+			Log.d(
+				READER_WINDOW_LOG_TAG,
+				"restored anchor key=${stableViewportAnchor.pageKey} position=${listState.firstVisibleItemIndex} " +
+					"actualKey=${listState.layoutInfo.visibleItemsInfo.firstOrNull()?.key}",
+			)
 		}
 		appliedViewportConfiguration = viewportConfiguration
 		isAnchorRestorePending = false
@@ -679,6 +759,10 @@ fun ComposeWebtoonReader(
 		snapshotFlow {
 			val layoutInfo = listState.layoutInfo
 			val visibleItems = layoutInfo.visibleItemsInfo
+			val isViewportLayoutReady = isWebtoonViewportLayoutReady(
+				visibleItemSizesPx = visibleItems.map { it.size },
+				viewportHeightPx = viewportHeightPx,
+			)
 			val activePageKey = resolveLastEndVisibleWebtoonPageKey(
 				items = visibleItems.mapNotNull { item ->
 					(item.key as? Long)?.let { key -> WebtoonVisibleItem(key, item.offset, item.size) }
@@ -693,7 +777,9 @@ fun ComposeWebtoonReader(
 				firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
 				shouldTrackViewport = shouldTrackWebtoonViewport(
 					isAnchorRestorePending = isAnchorRestorePending,
+					isPageWindowAnchorShifted = isPageWindowAnchorShiftedState.value,
 					viewportConfigurationChanged = viewportConfigurationChangedState.value,
+					isViewportLayoutReady = isViewportLayoutReady,
 				),
 			)
 		}
@@ -717,16 +803,6 @@ fun ComposeWebtoonReader(
 				val visiblePageKeys = Triple(lowerPageKey, upperPageKey, activePageKey)
 				if (reportedPageKeys != visiblePageKeys) {
 					reportedPageKeys = visiblePageKeys
-					val activePage = pagesSnapshot.firstOrNull { it.readerKey == activePageKey }
-					Log.d(
-						READER_WINDOW_LOG_TAG,
-						"viewport lower=${pagesSnapshot[visibleRange.first].chapterId}:" +
-							"${pagesSnapshot[visibleRange.first].index} " +
-							"upper=${pagesSnapshot[visibleRange.last].chapterId}:" +
-							"${pagesSnapshot[visibleRange.last].index} " +
-							"active=${activePage?.chapterId}:${activePage?.index} offset=" +
-							viewport.firstVisibleItemScrollOffset,
-					)
 					currentOnPagesChanged(lowerPageKey, upperPageKey, activePageKey)
 				}
 				currentOnInternalScrollChanged(page, viewport.firstVisibleItemScrollOffset)
@@ -734,13 +810,10 @@ fun ComposeWebtoonReader(
 	}
 	LaunchedEffect(requestedPage, requestedPageSmooth, isAnimationEnabled, isAnchorRestorePending) {
 		if (isAnchorRestorePending) return@LaunchedEffect
-		requestedPage?.takeIf { it in pages.indices }?.let { position ->
-			if (shouldAnimatePageNavigation(
-					listState.firstVisibleItemIndex,
-					position,
-					requestedPageSmooth,
-					isAnimationEnabled,
-				)) {
+		val position = requestedPage?.takeIf { it in pages.indices } ?: return@LaunchedEffect
+		webtoonNavigationJob?.cancel()
+		webtoonNavigationJob = webtoonNavigationScope.launch {
+			if (requestedPageSmooth && isAnimationEnabled) {
 				listState.animateScrollToItem(position)
 			} else {
 				listState.scrollToItem(position)
@@ -790,18 +863,18 @@ fun ComposeWebtoonReader(
 			.pointerInput(isZoomEnabled) {
 				if (isZoomEnabled) {
 					awaitEachGesture {
-						awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+						val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
 						webtoonFlingJob?.cancel()
 						val velocityTracker = VelocityTracker()
-						var transformed = false
+						velocityTracker.addPosition(down.uptimeMillis, down.position)
+						var singlePointerTransformed = false
+						var hadMultiplePointers = false
 						do {
 							val event = awaitPointerEvent(PointerEventPass.Initial)
-							if (event.changes.any { it.isConsumed }) continue
-							event.changes.filter { it.pressed }.forEach {
-								velocityTracker.addPosition(it.uptimeMillis, it.position)
-							}
 							val pressedCount = event.changes.count { it.pressed }
-							if (pressedCount > 0 && (pressedCount >= 2 || canvasScale > 1f)) {
+							if (pressedCount >= 2) {
+								hadMultiplePointers = true
+								event.changes.forEach { it.consume() }
 								webtoonZoomAnimationJob?.cancel()
 								val centroid = event.calculateCentroid(useCurrent = false)
 								val pan = event.calculatePan()
@@ -811,14 +884,22 @@ fun ComposeWebtoonReader(
 								) {
 									val previousScale = canvasScale
 									val nextScale = (previousScale * zoom).coerceIn(0.5f, 2.5f)
-									applyCanvasScaleAtFocus(nextScale, centroid)
-									applyCanvasPan(pan)
+									applyCanvasScaleAtFocus(nextScale, centroid, isTransformGesture = true)
+									applyCanvasPan(pan, isTransformGesture = true)
+								}
+							} else if (pressedCount == 1 && canvasScale > 1f) {
+								if (event.changes.any { it.isConsumed }) continue
+								val change = event.changes.first { it.pressed }
+								velocityTracker.addPosition(change.uptimeMillis, change.position)
+								val pan = event.calculatePan()
+								if (pan.x.isFinite() && pan.y.isFinite()) {
+									applyCanvasPan(pan, isTransformGesture = false)
 									event.changes.forEach { it.consume() }
-									transformed = true
+									singlePointerTransformed = true
 								}
 							}
 						} while (event.changes.any { it.pressed })
-						if (transformed) {
+						if (shouldFlingWebtoonCanvas(singlePointerTransformed, hadMultiplePointers)) {
 							webtoonFlingJob = zoomAnimationScope.launch {
 								flingCanvas(velocityTracker.calculateVelocity())
 							}
@@ -892,10 +973,11 @@ fun ComposeWebtoonReader(
 							lastTapUpAt = eventTime
 						}
 					}
-				}
-			},
-	) {
-		val pullThresholdPx = viewportHeightPx * WEBTOON_PULL_THRESHOLD
+					}
+				},
+		) {
+			if (viewportWidthPx <= 0 || viewportHeightPx <= 0) return@BoxWithConstraints
+			val pullThresholdPx = viewportHeightPx * WEBTOON_PULL_THRESHOLD
 		val nestedScrollConnection = remember(
 			listState,
 			pages,
@@ -1068,7 +1150,7 @@ fun ComposeDoublePageReader(
 	coverPage: Boolean = false,
 	imageLoader: ImageLoader,
 	imagePipeline: ComposeReaderImagePipeline,
-	onPagesChanged: (Int, Int) -> Unit,
+	onPagesChanged: (ReaderPage, ReaderPage) -> Unit,
 	requestedPage: Int? = null,
 	requestedPageSmooth: Boolean = false,
 	zoomCommand: ComposeReaderZoomCommand? = null,
@@ -1230,7 +1312,6 @@ fun ComposeDoublePageReader(
 		}
 	}
 	val autoBackgroundColors = remember { mutableStateMapOf<Long, Int>() }
-	val pageDisplaySizes = remember { mutableStateMapOf<Long, PageDisplaySize>() }
 	val pageCurlState = rememberComposeReaderPageCurlState()
 	LaunchedEffect(pagerState.isScrollInProgress) {
 		if (!pagerState.isScrollInProgress) pageCurlState.resetDrag()
@@ -1241,9 +1322,38 @@ fun ComposeDoublePageReader(
 		horizontalDragFraction = pageCurlState.horizontalDragFraction,
 		isReadingReversed = reverseLayout,
 	)
+	LaunchedEffect(pages, pagerState.isScrollInProgress) {
+		if (!pagerState.isScrollInProgress && displayedPages !== pages) {
+			val currentSpread = spreads.getOrNull(pagerState.settledPage)
+			val visibleAnchorPageKey = currentSpread?.positions
+				?.firstNotNullOfOrNull { displayItems[it].page?.readerKey }
+				?: retainedAnchorPageKey
+			val updatedDisplayItems = buildDoublePageDisplayItems(pages, coverPage = coverPage)
+			val updatedPageKeys = updatedDisplayItems.map {
+				it.page?.readerKey ?: DoublePageSpreadModel.SPACER_KEY
+			}
+			val updatedSpreadModel = DoublePageSpreadModel.create(updatedDisplayItems.size)
+			val anchorSpreadIndex = updatedSpreadModel.resolveAnchorSpreadIndex(
+				pageKeys = updatedPageKeys,
+				anchorPageKey = visibleAnchorPageKey,
+				fallbackPosition = pagerState.settledPage * 2,
+			)
+			isRestoringAnchor = true
+			try {
+				anchorPageKey = visibleAnchorPageKey
+				displayedPages = pages
+				withFrameNanos { }
+				if (pagerState.currentPage != anchorSpreadIndex) {
+					pagerState.scrollToPage(anchorSpreadIndex)
+				}
+			} finally {
+				isRestoringAnchor = false
+			}
+		}
+	}
 
 	LaunchedEffect(pageKeys, requestedPage) {
-		if (requestedPage == null) {
+		if (requestedPage == null && !isRestoringAnchor) {
 			val anchorSpreadIndex = spreadModel.resolveAnchorSpreadIndex(
 				pageKeys = pageKeys,
 				anchorPageKey = retainedAnchorPageKey,
@@ -1260,17 +1370,23 @@ fun ComposeDoublePageReader(
 		}
 	}
 	LaunchedEffect(pagerState, spreads, isRestoringAnchor) {
-		snapshotFlow { pagerState.settledPage to isRestoringAnchor }
+		snapshotFlow {
+			Triple(
+				pagerState.isScrollInProgress,
+				pagerState.settledPage,
+				isRestoringAnchor,
+			)
+		}
 			.distinctUntilChanged()
-			.collect { (spreadIndex, restoringAnchor) ->
-				if (restoringAnchor) return@collect
+			.collect { (isScrolling, spreadIndex, restoringAnchor) ->
+				if (!shouldReportReaderSettledPage(isScrolling, restoringAnchor)) return@collect
 				val spread = spreads[spreadIndex]
-				val originalPositions = spread.positions.mapNotNull {
-					displayItems[it].originalPosition.takeIf { position -> position >= 0 }
+				val visiblePages = spread.positions.mapNotNull {
+					displayItems[it].page
 				}
-				if (originalPositions.isNotEmpty()) {
-					anchorPageKey = displayItems[spread.lowerPosition].page?.readerKey ?: anchorPageKey
-					onPagesChanged(originalPositions.first(), originalPositions.last())
+				if (visiblePages.isNotEmpty()) {
+					anchorPageKey = visiblePages.first().readerKey
+					onPagesChanged(visiblePages.first(), visiblePages.last())
 				}
 			}
 	}
@@ -1367,13 +1483,11 @@ fun ComposeDoublePageReader(
 		Row(
 			modifier = modifier.background(Color(spreadBackground)),
 		) {
-			orderedPositions.forEachIndexed { visualIndex, position ->
+			orderedPositions.forEach { position ->
 				val page = displayItems[position].page
 				if (page == null) {
 					Box(modifier = Modifier.weight(1f).fillMaxSize())
 				} else {
-					val imageSize = pageDisplaySizes[page.readerKey]
-					val isWide = imageSize?.let { it.width.toFloat() > it.height * DOUBLE_PAGE_WIDE_RATIO } == true
 					ComposeReaderPage(
 						page = page,
 						imageLoader = imageLoader,
@@ -1399,38 +1513,9 @@ fun ComposeDoublePageReader(
 						onAutoBackgroundResolved = { color ->
 							autoBackgroundColors[page.readerKey] = color
 						},
-						onImageSizeResolved = { width, height ->
-							pageDisplaySizes[page.readerKey] = PageDisplaySize(width, height)
-						},
 						modifier = Modifier
 							.weight(1f)
-							.fillMaxSize()
-							.then(
-								if (isWide) {
-									Modifier
-										.zIndex(1f)
-										.graphicsLayer {
-											val halfFit = minOf(
-												size.width / imageSize!!.width.toFloat(),
-												size.height / imageSize.height.toFloat(),
-											)
-											val spreadFit = minOf(
-												size.width * 2f / imageSize.width,
-												size.height / imageSize.height,
-											)
-											val ratio = if (halfFit > 0f) spreadFit / halfFit else 1f
-											scaleX = ratio
-											scaleY = ratio
-											translationX = if (visualIndex == 0) {
-												size.width / 2f
-											} else {
-												-size.width / 2f
-											}
-										}
-								} else {
-									Modifier
-								},
-							),
+							.fillMaxSize(),
 					)
 				}
 			}
@@ -1745,69 +1830,44 @@ fun ComposeDoublePageReader(
 						}
 					}
 				},
-			) {
-				orderedPositions.forEachIndexed { visualIndex, position ->
-				val page = displayItems[position].page
-				if (page == null) {
-					Box(modifier = Modifier.weight(1f).fillMaxSize())
-				} else {
-					val imageSize = pageDisplaySizes[page.readerKey]
-					val isWide = imageSize?.let { it.width.toFloat() > it.height * DOUBLE_PAGE_WIDE_RATIO } == true
-					ComposeReaderPage(
-					page = page,
-					imageLoader = imageLoader,
-					imagePipeline = imagePipeline,
-					zoomCommand = null,
-					isZoomEnabled = false,
-					onShowErrorDetails = onShowErrorDetails,
-					onRetryError = onRetryError,
-					resolveErrorStringId = resolveErrorStringId,
-					isAnimationEnabled = isAnimationEnabled,
-					readerBackground = readerBackground,
-					readerBackgroundColor = readerBackgroundColor,
-					bookBackgroundTint = bookBackgroundTint,
-					imageColorFilter = imageColorFilter,
-					bitmapConfig = bitmapConfig,
-					isReaderOptimizationEnabled = isReaderOptimizationEnabled,
-					zoomMode = zoomMode,
-					isCropEnabled = isCropEnabled,
-					isPageVisible = pagerState.settledPage == spreadIndex,
-					isPageCurlEnabled = pageAnimation == ReaderAnimation.SIMULATION,
-					applyPageBackground = false,
-					pageBackgroundColorOverride = spreadBackground,
-					onAutoBackgroundResolved = { color ->
-						autoBackgroundColors[page.readerKey] = color
-					},
-					onImageSizeResolved = { width, height ->
-						pageDisplaySizes[page.readerKey] = PageDisplaySize(width, height)
-					},
-					modifier = Modifier
-						.weight(1f)
-						.fillMaxSize()
-						.then(
-							if (isWide) {
-								Modifier
-									.zIndex(1f)
-									.graphicsLayer {
-										val halfFit = minOf(
-											size.width / imageSize!!.width.toFloat(),
-											size.height / imageSize.height.toFloat(),
-										)
-										val spreadFit = minOf(
-											size.width * 2f / imageSize.width,
-											size.height / imageSize.height,
-										)
-										val ratio = if (halfFit > 0f) spreadFit / halfFit else 1f
-										scaleX = ratio
-										scaleY = ratio
-										translationX = if (visualIndex == 0) size.width / 2f else -size.width / 2f
-									}
-							} else Modifier,
-						),
-				)
-				}
-			}
-				if (spread.lowerPosition == spread.upperPosition) {
+				) {
+					orderedPositions.forEach { position ->
+						val page = displayItems[position].page
+						if (page == null) {
+							Box(modifier = Modifier.weight(1f).fillMaxSize())
+						} else {
+							ComposeReaderPage(
+								page = page,
+								imageLoader = imageLoader,
+								imagePipeline = imagePipeline,
+								zoomCommand = null,
+								isZoomEnabled = false,
+								onShowErrorDetails = onShowErrorDetails,
+								onRetryError = onRetryError,
+								resolveErrorStringId = resolveErrorStringId,
+								isAnimationEnabled = isAnimationEnabled,
+								readerBackground = readerBackground,
+								readerBackgroundColor = readerBackgroundColor,
+								bookBackgroundTint = bookBackgroundTint,
+								imageColorFilter = imageColorFilter,
+								bitmapConfig = bitmapConfig,
+								isReaderOptimizationEnabled = isReaderOptimizationEnabled,
+								zoomMode = zoomMode,
+								isCropEnabled = isCropEnabled,
+								isPageVisible = pagerState.settledPage == spreadIndex,
+								isPageCurlEnabled = pageAnimation == ReaderAnimation.SIMULATION,
+								applyPageBackground = false,
+								pageBackgroundColorOverride = spreadBackground,
+								onAutoBackgroundResolved = { color ->
+									autoBackgroundColors[page.readerKey] = color
+								},
+								modifier = Modifier
+									.weight(1f)
+									.fillMaxSize(),
+							)
+						}
+					}
+					if (spread.lowerPosition == spread.upperPosition) {
 					Box(modifier = Modifier.weight(1f).fillMaxSize())
 				}
 			}
@@ -2046,6 +2106,7 @@ private fun ComposeWebtoonPage(
 	modifier: Modifier = Modifier,
 ) {
 	var retryKey by remember(page.readerKey) { mutableIntStateOf(0) }
+	val imageScalingQuality = LocalReaderImageScalingQuality.current
 	var renderError by remember(page.readerKey) { mutableStateOf<Throwable?>(null) }
 	var forceCoil by remember(page.readerKey) { mutableStateOf(false) }
 	val state by produceState<ComposeReaderImageState>(
@@ -2069,7 +2130,8 @@ private fun ComposeWebtoonPage(
 		renderError = null
 	}
 	val itemHeight = with(LocalDensity.current) { measurement.itemHeightPx.toDp() }
-	val canUseSubsampling = !forceCoil && !isCropEnabled && page.split == ReaderPageSplit.NONE
+	val canUseSubsampling = imageScalingQuality.usesTelephoto() &&
+		!forceCoil && !isCropEnabled && page.split == ReaderPageSplit.NONE
 
 	Box(
 		modifier = modifier
@@ -2109,14 +2171,16 @@ private fun ComposeWebtoonPage(
 					},
 					onImageError = { forceCoil = true },
 					placeholder = {
-						WebtoonTelephotoPlaceholder(
-							uri = value.original,
-							pageKey = page.readerKey,
-							decodeWidthPx = decodeWidthPx,
-							decodeHeightPx = decodeHeightPx,
-							imageLoader = imageLoader,
-							colorFilter = imageColorFilter,
-						)
+						if (isPageVisible) {
+							WebtoonTelephotoPlaceholder(
+								uri = value.original,
+								pageKey = page.readerKey,
+								decodeWidthPx = decodeWidthPx,
+								decodeHeightPx = decodeHeightPx,
+								imageLoader = imageLoader,
+								colorFilter = imageColorFilter,
+							)
+						}
 					},
 					modifier = Modifier.fillMaxSize(),
 				)
@@ -2149,14 +2213,16 @@ private fun ComposeWebtoonPage(
 					},
 					onImageError = { forceCoil = true },
 					placeholder = {
-						WebtoonTelephotoPlaceholder(
-							uri = value.original,
-							pageKey = page.readerKey,
-							decodeWidthPx = decodeWidthPx,
-							decodeHeightPx = decodeHeightPx,
-							imageLoader = imageLoader,
-							colorFilter = imageColorFilter,
-						)
+						if (isPageVisible) {
+							WebtoonTelephotoPlaceholder(
+								uri = value.original,
+								pageKey = page.readerKey,
+								decodeWidthPx = decodeWidthPx,
+								decodeHeightPx = decodeHeightPx,
+								imageLoader = imageLoader,
+								colorFilter = imageColorFilter,
+							)
+						}
 					},
 					modifier = Modifier.fillMaxSize(),
 				)
@@ -2186,14 +2252,16 @@ private fun ComposeWebtoonPage(
 					onImageSizeResolved = onImageSizeResolved,
 					onImageError = { forceCoil = true },
 					placeholder = {
-						WebtoonTelephotoPlaceholder(
-							uri = value.enhanced,
-							pageKey = page.readerKey,
-							decodeWidthPx = decodeWidthPx,
-							decodeHeightPx = decodeHeightPx,
-							imageLoader = imageLoader,
-							colorFilter = imageColorFilter,
-						)
+						if (isPageVisible) {
+							WebtoonTelephotoPlaceholder(
+								uri = value.enhanced,
+								pageKey = page.readerKey,
+								decodeWidthPx = decodeWidthPx,
+								decodeHeightPx = decodeHeightPx,
+								imageLoader = imageLoader,
+								colorFilter = imageColorFilter,
+							)
+						}
 					},
 					modifier = Modifier.fillMaxSize(),
 				)
@@ -2250,14 +2318,14 @@ private fun ReaderPageError(
 private fun ReaderPageLoading(progress: Float?) {
 	Column(horizontalAlignment = Alignment.CenterHorizontally) {
 		if (progress == null) {
-			CircularProgressIndicator()
+			KototoroLoadingIndicator()
 			Text(
 				text = stringResource(R.string.loading_),
 				color = MaterialTheme.colorScheme.onSurface,
 				modifier = Modifier.padding(top = 8.dp),
 			)
 		} else {
-			CircularProgressIndicator(progress = { progress })
+			KototoroLoadingIndicator(progress = { progress })
 			Text(
 				text = "${(progress * 100).toInt()}%",
 				color = MaterialTheme.colorScheme.onSurface,
@@ -2282,6 +2350,7 @@ private fun ReaderPreviewImage(
 	modifier: Modifier = Modifier,
 ) {
 	val context = LocalContext.current
+	val imageScalingQuality = LocalReaderImageScalingQuality.current
 	val request = remember(page.readerKey, previewUrl, isCropEnabled, isReaderOptimizationEnabled) {
 		ImageRequest.Builder(context)
 			.data(previewUrl)
@@ -2298,6 +2367,7 @@ private fun ReaderPreviewImage(
 		contentDescription = null,
 		contentScale = contentScale,
 		colorFilter = colorFilter,
+		filterQuality = imageScalingQuality.toComposeFilterQuality(),
 		modifier = modifier,
 	)
 }
@@ -2319,10 +2389,13 @@ private fun WebtoonImage(
 	onImageError: (Throwable) -> Unit,
 ) {
 	val context = LocalContext.current
+	val imageScalingQuality = LocalReaderImageScalingQuality.current
 	var animatable by remember(uri) { mutableStateOf<Animatable?>(null) }
 	AnimatedDrawableLifecycle(animatable, isPageVisible)
-	val useSampledDecode = !isAnimated && !isCropEnabled && split == ReaderPageSplit.NONE &&
+	val useLanczos = imageScalingQuality == ReaderImageScalingQuality.LANCZOS &&
 		decodeWidthPx > 0 && decodeHeightPx > 0
+	val useSampledDecode = !isAnimated && !isCropEnabled && split == ReaderPageSplit.NONE &&
+		decodeWidthPx > 0 && decodeHeightPx > 0 && !useLanczos
 	AsyncImage(
 		model = remember(
 			uri,
@@ -2333,6 +2406,7 @@ private fun WebtoonImage(
 			decodeWidthPx,
 			decodeHeightPx,
 			isReaderOptimizationEnabled,
+			imageScalingQuality,
 		) {
 			ImageRequest.Builder(context)
 				.data(uri)
@@ -2347,7 +2421,17 @@ private fun WebtoonImage(
 				}
 				.allowHardware(!isAnimated)
 				.apply {
-					if (!isAnimated) transformations(ComposeReaderPageTransformation(isCropEnabled, split))
+					if (!isAnimated) {
+						val pageTransformation = ComposeReaderPageTransformation(isCropEnabled, split)
+						if (useLanczos) {
+							transformations(
+								pageTransformation,
+								ReaderLanczosTransformation(decodeWidthPx, decodeHeightPx),
+							)
+						} else {
+							transformations(pageTransformation)
+						}
+					}
 					if (isReaderOptimizationEnabled) memoryCachePolicy(CachePolicy.DISABLED)
 				}
 				.build()
@@ -2357,6 +2441,7 @@ private fun WebtoonImage(
 		alignment = Alignment.TopCenter,
 		contentScale = ContentScale.FillWidth,
 		colorFilter = colorFilter,
+		filterQuality = imageScalingQuality.toComposeFilterQuality(),
 		onSuccess = { result ->
 			animatable = (result.result.image as? DrawableImage)?.drawable as? Animatable
 			onImageSizeResolved(result.result.image.width, result.result.image.height)
@@ -2378,6 +2463,7 @@ private fun WebtoonTelephotoPlaceholder(
 	colorFilter: ColorFilter?,
 ) {
 	val context = LocalContext.current
+	val imageScalingQuality = LocalReaderImageScalingQuality.current
 	AsyncImage(
 		model = remember(uri, pageKey, decodeWidthPx, decodeHeightPx) {
 			ImageRequest.Builder(context)
@@ -2396,6 +2482,7 @@ private fun WebtoonTelephotoPlaceholder(
 		alignment = Alignment.TopCenter,
 		contentScale = ContentScale.FillWidth,
 		colorFilter = colorFilter,
+		filterQuality = imageScalingQuality.toComposeFilterQuality(),
 		modifier = Modifier.fillMaxSize(),
 	)
 }
@@ -2423,7 +2510,8 @@ private fun PagedReaderImage(
 	onImageError: (Throwable) -> Unit,
 	modifier: Modifier = Modifier,
 ) {
-	if (!isPageCurlEnabled && !forceCoil && !isAnimated && !isCropEnabled &&
+	val imageScalingQuality = LocalReaderImageScalingQuality.current
+	if (imageScalingQuality.usesTelephoto() && !isPageCurlEnabled && !forceCoil && !isAnimated && !isCropEnabled &&
 		split == ReaderPageSplit.NONE && zoomMode != ZoomMode.KEEP_START
 	) {
 		ComposePagedTelephotoImage(
@@ -2481,6 +2569,7 @@ private fun ZoomableReaderImage(
 	modifier: Modifier = Modifier,
 ) {
 	val context = LocalContext.current
+	val imageScalingQuality = LocalReaderImageScalingQuality.current
 	val zoomState = rememberSaveable(pageKey, zoomMode, saver = ReaderZoomState.Saver) { ReaderZoomState() }
 	var viewportWidth by remember(pageKey) { mutableIntStateOf(0) }
 	var viewportHeight by remember(pageKey) { mutableIntStateOf(0) }
@@ -2531,12 +2620,35 @@ private fun ZoomableReaderImage(
 	}
 
 	AsyncImage(
-		model = remember(uri, pageKey, split, isCropEnabled, isAnimated, isReaderOptimizationEnabled) {
+		model = remember(
+			uri,
+			pageKey,
+			split,
+			isCropEnabled,
+			isAnimated,
+			isReaderOptimizationEnabled,
+			imageScalingQuality,
+			viewportWidth,
+			viewportHeight,
+		) {
+			val useLanczos = imageScalingQuality == ReaderImageScalingQuality.LANCZOS &&
+				viewportWidth > 0 && viewportHeight > 0 && !isAnimated
 			ImageRequest.Builder(context)
 				.data(uri)
 				.allowHardware(!isAnimated)
 				.apply {
-					if (!isAnimated) transformations(ComposeReaderPageTransformation(isCropEnabled, split))
+					if (!isAnimated) {
+						val pageTransformation = ComposeReaderPageTransformation(isCropEnabled, split)
+						if (useLanczos) {
+							size(Size.ORIGINAL)
+							transformations(
+								pageTransformation,
+								ReaderLanczosTransformation(viewportWidth, viewportHeight),
+							)
+						} else {
+							transformations(pageTransformation)
+						}
+					}
 					if (isReaderOptimizationEnabled) memoryCachePolicy(CachePolicy.DISABLED)
 				}
 				.build()
@@ -2550,6 +2662,7 @@ private fun ZoomableReaderImage(
 			ZoomMode.FIT_WIDTH -> ContentScale.FillWidth
 		},
 		colorFilter = colorFilter,
+		filterQuality = imageScalingQuality.toComposeFilterQuality(),
 		onSuccess = { result ->
 			animatable = (result.result.image as? DrawableImage)?.drawable as? Animatable
 			imageWidth = result.result.image.width
@@ -2639,12 +2752,24 @@ internal fun resolveReaderBeyondViewportPageCount(isPreloadReductionEnabled: Boo
 internal fun resolveWebtoonAheadCacheFraction(isPreloadReductionEnabled: Boolean): Float =
 	if (isPreloadReductionEnabled) 0f else WEBTOON_AHEAD_CACHE_FRACTION
 
+internal fun resolveWebtoonGestureBoundaryHandoff(
+	scale: Float,
+	desiredY: Float,
+	boundedY: Float,
+	isTransformGesture: Boolean,
+): Int = if (isTransformGesture) 0 else resolveWebtoonBoundaryHandoff(scale, desiredY, boundedY)
+
+internal fun shouldReportReaderSettledPage(isScrollInProgress: Boolean, isRestoringAnchor: Boolean): Boolean =
+	!isScrollInProgress && !isRestoringAnchor
+
+internal fun shouldFlingWebtoonCanvas(singlePointerTransformed: Boolean, hadMultiplePointers: Boolean): Boolean =
+	singlePointerTransformed && !hadMultiplePointers
+
 private const val ZOOM_ANIMATION_DURATION_MS = 220
-private const val DOUBLE_PAGE_WIDE_RATIO = 1.3f
 private const val ADVANCED_PAGE_EPSILON = 0.001f
 private const val SIMULATION_PAGE_EPSILON = 0.001f
 private const val READER_ANIMATION_DEBUG_TAG = "ReaderPageAnimation"
-private const val WEBTOON_AHEAD_CACHE_FRACTION = 5f
+private const val WEBTOON_AHEAD_CACHE_FRACTION = 2f
 private const val WEBTOON_PAGE_CONTENT_TYPE = "webtoon_page"
 private const val WEBTOON_PULL_THRESHOLD = 0.3f
 private const val READER_WINDOW_LOG_TAG = "ReaderWindow"
